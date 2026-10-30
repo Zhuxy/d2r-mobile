@@ -74,6 +74,7 @@ static const struct { const char *k, *zh, *en, *es, *mx, *ru, *ko; } k_dm_i18n[]
     { "dmCustomItemNotes", "物品注释与旧译名（重启后生效）", "Item notes (Chinese/Spanish only, restart)", "Notas de objetos (reinicia)", "Notas de objetos (reinicia)", "Пометки к предметам (кит./исп., рестарт)", "아이템 주석 (중/스페인어, 재시작)" },
     { "dmCustomIcloud", "iCloud 同步存档（重启后生效）", "iCloud save sync (after restart)", "Sincronía iCloud (tras reiniciar)", "Sincronía iCloud (tras reiniciar)", "Синхронизация iCloud (рестарт)", "iCloud 저장 동기화 (재시작 후)" },
     { "dmCustomPotPick", "腰带有空位时自动拾取能放进去的药水", "Auto-pick potions into belt", "Recoger pociones al cinturón", "Recolectar pociones al cinturón", "Зелья в пояс автоматически", "벨트에 물약 자동 줍기" },
+    { "dmCustomBeltAuto", "自动从背包补充药水到腰带", "Auto-refill belt from inventory", "Rellenar cinturón desde inventario", "Rellenar cinturón desde inventario", "Автопополнение пояса из сумки", "가방 물약으로 벨트 자동 보충" },
     { "dmCustomDropHaptic", "高价值物品掉落时震动", "Vibrate on valuable drops", "Vibrar con botín valioso", "Vibrar con botín valioso", "Вибрация на ценных дропах", "고가치 드롭 시 진동" },
     { "dmCustomGemPick", "符文与宝石自动拾取（直接进高级仓库）", "Auto-stash runes & gems", "Runas y gemas al alijo", "Runas y gemas al Arcón", "Руны и камни в хранилище", "룬·보석 자동 창고 보관" },
     { "dmCustomStoreBtn", "背包「存放」按钮", "Inventory Deposit button", "Botón Depositar en inventario", "Botón Depositar en inventario", "Кнопка «Внести» в инвентаре", "가방 '보관' 버튼" },

@@ -5,11 +5,13 @@
 // 已生效的值：一般开关为 0 / 1，多项单选见下方；只在玩家点选项页「应用」后变，「放弃」不变，「默认」= 各键缺省。键不认识返回 1。
 // 任意线程可调：第一次调用读一次文件，之后只是原子量读 + 几项字符串比较，无锁。iOS 上启动期（存档挂上之前）就能读。
 // 键：auto_mana 自动喝药水（红蓝两种，键名沿用）/ drop_light 高价值掉落光柱 / map_mark 小地图标注出入口、小站与任务终点 / item_notes 物品注释与旧译名 / icloud iCloud 同步存档（cloud_ios.m，启动时读）/ pot_pick 药水自动拾取（dm_potpick.c）/ drop_haptic 高价值掉落震动（dm_drophaptic.c） / gem_pick 符文宝石自动拾取进高级仓库（百宝囊）/ store_btn 背包「存放」按钮（dm_pouch.c）/ eco_fps 省电模式 30 帧（nvn_mtl.m，缺省关）
+// belt_auto：局内从背包自动补充药水到腰带，默认关；开背包时的既有补药仍由 pot_pick 控制。
 // touch_swap_above：0 = 传送门左侧（默认），1 = 技能区上方；点「应用」后生效。
 // spawn_rate：0/1/2/3 = 0.5×/1×/1.5×/2× 普通怪密度与精英组数；默认 1，下一局生效。
 // Effective value: switches are 0 / 1, enumerated choices are described below. Changes only after Apply; Discard leaves it unchanged; Default restores each key's default. Returns 1 for an unknown key.
 // Callable from any thread: the first call reads the file once, after that it is an atomic read plus a few string comparisons, lock-free. On iOS it can be read during startup (before the save is mounted).
 // Keys: auto_mana auto-drink potions (red and blue; key name kept) / drop_light light beam on high-value drops / map_mark minimap markers for entrances and exits, waypoints and quest goals / item_notes item notes and old translated names / icloud iCloud save sync (cloud_ios.m, read at startup) / pot_pick potion auto-pickup (dm_potpick.c) / drop_haptic haptics on high-value drops (dm_drophaptic.c) / gem_pick auto-pickup of runes and gems into the advanced stash (pouch) / store_btn the inventory Deposit button (dm_pouch.c) / eco_fps power-saving mode at 30 fps (nvn_mtl.m, off by default)
+// belt_auto: refill the belt from inventory during gameplay, off by default; pot_pick still controls the existing inventory-open refill.
 // touch_swap_above: 0 = left of portal (default), 1 = above the skill fan; applies after Apply.
 // spawn_rate: 0/1/2/3 = 0.5x/1x/1.5x/2x normal density and elite pack count; default 1, effective next game.
 int dm_custom_get(const char *key);

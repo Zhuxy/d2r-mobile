@@ -1,6 +1,6 @@
-// 开背包自动补腰带（「双击腰带空格补满」点不准，改成开背包自动补；双击补满保留）。开关跟自定义页「自动拾取药水」（pot_pick）。
+// 背包药水补腰带：开背包时由 pot_pick 触发一次；另有 belt_auto 开关，在局内腰带 / 背包药水变化时自动补，不用打开背包。
 // 规则：
-//   · 只在物品栏从关到开的那一下触发一次；开着期间不再补（不和玩家拖动抢）。
+//   · 开背包时只触发一次；局内自动补只在没有面板且手上没拿物品时运行。
 //   · 只动红（hp1–hp5）/ 蓝（mp1–mp5）/ 紫（rvs、rvl）；解毒 / 解冻 / 耐力和卷轴不进腰带。
 //   · 每列认最底下那瓶的类别，从背包取同类往上补满（或背包没这类了为止）；最底下是别的东西（解毒、卷轴…）的列不动。
 //   · 空列按「红、红、蓝、蓝」认领（第 1、2 列红，第 3、4 列蓝）；认领的颜色背包里没有就补紫；紫也没有，就让给背包里有的那种
@@ -9,11 +9,9 @@
 // 放法 = 原版背包格「移到腰带」main+0x3c1cd0(物品, 玩家, 来源页, 1, {槽, 已定槽 = 1})：发 0x53 包。槽必须是原版腰带找位 0x561de0 对这瓶算出来的那个——
 // 服务端收包时自己再找一次位，和包里的槽不相等就拒收（见 dm_beltauto_step 里的说明）。槽号 = 行 × 4 + 列。一次一瓶、等客户端看到它进了腰带（≤ 60 帧）再放下一瓶；没进的那瓶记红、本轮跳过。
 // 腰带格数照原版找位里的算法：身上腰带（装备格 8）的腰带类型 0x5cc9b0（没腰带 = 2）→ 数据表（版本表 +0x1578，每行 0x120）+4 = 格数。
-// Auto-fill the belt when the inventory opens ("double-tap an empty belt cell to fill" is hard to hit, so it became auto-fill on opening the inventory;
-// double-tap fill is kept). The switch follows "Auto-pick potions" (pot_pick) on the Custom page.
+// Refill the belt from inventory: pot_pick triggers once when inventory opens; belt_auto independently refills during gameplay without opening inventory.
 // Rules:
-//   - Triggers only once, at the moment the inventory goes from closed to open; no more filling while it stays open (does not fight with the player's
-//     dragging).
+//   - Inventory-open refill triggers once; gameplay refill runs only with no item panel or held item.
 //   - Only touches red (hp1–hp5) / blue (mp1–mp5) / purple (rvs, rvl); antidote / thawing / stamina potions and scrolls do not go into the belt.
 //   - Each column takes the kind of its bottom potion and is filled upward with the same kind from the inventory (or until the inventory has none left);
 //     a column whose bottom is something else (antidote, scroll...) is left alone.
@@ -30,6 +28,8 @@
 // Belt cell count follows the algorithm in the original finder: belt type 0x5cc9b0 of the equipped belt (equipment slot 8) (no belt = 2) → data table
 // (version table +0x1578, 0x120 per row) +4 = cell count.
 #include "hle.h"
+#include "dm_cursor.h"
+#include "dm_uiscreen.h"
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -58,7 +58,7 @@ static int kind_rank(uint32_t c, int *rank) {   // 类别 + 档位（大的数�
 }
 static const char *kind_name(int k) { return k == RED ? "红" : k == BLUE ? "蓝" : k == PURPLE ? "紫" : k == OTHER ? "别的" : "空"; }
 
-typedef struct { uint64_t belt[16]; int boxes, nbelt; uint64_t best[4]; int n[4]; char bag[200]; } snap;   // nbelt = 腰带里的件数；bag = 背包药水清单（日志用）   // 腰带各格的物品；格数；背包里各类最大的那瓶与件数 | nbelt = number of items in the belt; bag = inventory potion list (for logging)   // items in each belt cell; cell count; the largest bottle of each kind in the inventory and the counts
+typedef struct { uint64_t belt[16]; int boxes, nbelt; uint64_t best[4]; int n[4]; uint64_t sig; char bag[200]; } snap;   // sig = 腰带 + 背包药水状态，用来避免无变化时反复尝试 | sig = belt and inventory potion state, avoiding repeated attempts without a change
 // 放不进腰带的那几瓶（Issue：线上 诊断日志 29 次开背包都卡在同一瓶 hp5 上——客户端看它在背包、往空列放服务端不收；根因未定，等带下面诊断字段的线上日志）。
 // 一瓶放不进不该让整轮停、下次还挑它：g_bad 记放失败过的（跨轮留着，挑药时排在没失败过的后面），g_tried 记本轮已经试过失败的（本轮不再挑）。
 // The bottles that cannot be put into the belt (Reported case: in a diagnostic log from a released build, all 29 inventory opens got stuck on the same hp5 bottle -- the client sees it in the inventory, but the server does not accept placing it into an empty column; root cause undetermined, waiting for logs from released builds carrying the diagnostic fields below).
@@ -72,6 +72,7 @@ static void item_where(uint64_t it, char *o, size_t cap) {   // 「容器 c 页 
 }
 static int take_snap(uint8_t *b, uint64_t pl, snap *S) {
     memset(S, 0, sizeof *S);
+    S->sig = 1469598103934665603ull;
     uint64_t inv = rd(pl + 0x90); if (!inv || *(uint32_t *)(uintptr_t)inv != 0x01020304) return 0;
     uint64_t pages = rd(inv + 0x20); if (!pages || rd(inv + 0x28) < 2) return 0;
     uint64_t belt_item = rd(rd(pages + 0x18) + 0x40);   // 装备格 8 = 腰带 | equipment slot 8 = belt
@@ -79,13 +80,13 @@ static int take_snap(uint8_t *b, uint64_t pl, snap *S) {
     uint8_t ver = *(uint8_t *)(uintptr_t)(pl + 0x1bd); if (ver < 1 || ver > 3) return 0;
     uint64_t T = rd((uint64_t)(uintptr_t)(b + 0x2d64a18 + ver * 16)), rows = T ? rd(T + 0x1578) : 0; if (!rows) return 0;
     S->boxes = *(uint8_t *)(uintptr_t)(rows + (uint64_t)type * 0x120 + 4); if (S->boxes > 16) S->boxes = 16;
-    uint64_t bg = rd(pages + 0x20 + 0x18); for (int i = 0; i < S->boxes && bg; i++) { S->belt[i] = rd(bg + 8 * (uint64_t)i); S->nbelt += S->belt[i] != 0; }   // 页 1 = 腰带格 | page 1 = belt cells
+    uint64_t bg = rd(pages + 0x20 + 0x18); for (int i = 0; i < S->boxes && bg; i++) { S->belt[i] = rd(bg + 8 * (uint64_t)i); S->nbelt += S->belt[i] != 0; S->sig = (S->sig ^ (S->belt[i] ? *(uint32_t *)(uintptr_t)(S->belt[i] + 8) : 0)) * 1099511628211ull; }   // 页 1 = 腰带格 | page 1 = belt cells
     int brank[4] = { -1000, -1000, -1000, -1000 };
     for (uint64_t it = rd(inv + 0x10), k = 0; it && k < 1024; k++) { uint64_t d = rd(it + 0x10); if (!d) break;
         if (*(uint32_t *)(uintptr_t)(it + 0xc) == 0 && *(uint8_t *)(uintptr_t)(d + 0x55) == 0) { int r, kd = kind_rank(code_of(b, it), &r);   // 背包（页 0）里的 | the ones in the inventory (page 0)
             uint32_t iid = *(uint32_t *)(uintptr_t)(it + 8);
             if (kd != OTHER && !in_list(g_tried, g_ntried, iid) && r - (in_list(g_bad, g_nbad, iid) ? 100 : 0) > brank[kd]) { brank[kd] = r - (in_list(g_bad, g_nbad, iid) ? 100 : 0); S->best[kd] = it; }   // 同类先大的；放失败过的排到最后，本轮试过的不再挑 | within the same kind, larger ones first; ones that failed to be placed before are ranked last, and ones tried this round are not picked again
-            if (kd != OTHER) { S->n[kd]++; size_t L = strlen(S->bag); uint32_t cd = code_of(b, it); if (L < sizeof S->bag - 6) snprintf(S->bag + L, sizeof S->bag - L, "%s%.3s", L ? "," : "", (char *)&cd); } }
+            if (kd != OTHER) { S->n[kd]++; S->sig = (S->sig ^ iid) * 1099511628211ull; size_t L = strlen(S->bag); uint32_t cd = code_of(b, it); if (L < sizeof S->bag - 6) snprintf(S->bag + L, sizeof S->bag - L, "%s%.3s", L ? "," : "", (char *)&cd); } }
         it = rd(d + 0xb0); }
     return 1;
 }
@@ -97,7 +98,7 @@ static void belt_text(uint8_t *b, const snap *S, char *o, size_t cap) {   // 「
 }
 
 void dm_beltauto_step(uint8_t *b) {   // 游戏主线程每帧（dm_world.c） | every frame on the game main thread (dm_world.c)
-    static int active, moves, want_slot = -1; static uint64_t next, deadline; static uint32_t want_id; static char want_cli[64]; static int fails;   // fails = 本轮放失败的瓶数（moves 含它们） | fails = number of bottles that failed to be placed this round (moves includes them)
+    static int mode, moves, want_slot = -1; static uint64_t next, deadline, scan_next, seen_sig, seen_pl; static int seen; static uint32_t want_id; static char want_cli[64]; static int fails;   // mode: 1 开背包，2 局内自动；fails = 本轮放失败的瓶数 | mode: 1 inventory-open, 2 gameplay auto; fails = failed bottles this round
     if (!b) return;
     // 测试开关 DM_TEST_BELT_DRINK=<帧>:<列号…>（造现场：如 120:134 = 第 120 帧起把第 1、3、4 列的药喝光；写 0 = 背包里的红 / 蓝也喝光）：每 15 帧对这些列各喝最底下一瓶（dm_belt_use，原版喝药路径），喝空为止
     // Test switch DM_TEST_BELT_DRINK=<frame>:<column numbers...> (sets up a scenario: e.g. 120:134 = starting at frame 120 drink up the potions in columns 1, 3 and 4; writing 0 = also drink up the red / blue ones in the inventory): every 15 frames drink the bottom-most bottle of each of these columns (dm_belt_use, the original game's potion-drinking path), until empty
@@ -110,25 +111,44 @@ void dm_beltauto_step(uint8_t *b) {   // 游戏主线程每帧（dm_world.c） |
           if (!any) { st = 2; LOG("DM_TEST_BELT_DRINK：第 %s 列喝空了（帧 %llu）", cols, (unsigned long long)f); } } }
     if (atomic_exchange(&g_req, 0)) {
         static int env = -2; if (env == -2) { const char *e = getenv("DM_POT_PICK"); env = e ? e[0] != '0' : -1; }   // 同药水自动拾取：测试强制开关优先于自定义页 | same as potion auto-pickup: the test force switch takes priority over the custom settings page
-        if (env >= 0 ? env : dm_custom_get("pot_pick")) { active = 1; moves = 0; want_slot = -1; next = 0; deadline = 0; g_ntried = 0; fails = 0; }
+        if (env >= 0 ? env : dm_custom_get("pot_pick")) { mode = 1; moves = 0; want_slot = -1; next = 0; deadline = 0; g_ntried = 0; fails = 0; }
         else LOG("开背包补腰带：开关关着，不动");
     }
-    if (!active) return;
-    uint64_t fr = dm_guest_frame(); if (fr < next) return;
+    uint64_t fr = dm_guest_frame();
+    int dm_game_paused(void);
+    int auto_on = dm_custom_get("belt_auto");
+    int world_ok = 0;
+    if (mode == 2 || (auto_on && !mode && fr >= scan_next))
+        world_ok = dm_uiscreen_ingame() && !dm_game_paused() && !dm_ui_panel_state() && !dm_ui_free_cursor() && !dm_ui_panel_shown("PlayerInventoryExpansionLayout");
+    if (!auto_on || !dm_uiscreen_ingame()) seen = 0;   // 再启用 / 下一局时重新扫描 | rescan when re-enabled or entering another game
+    if (mode == 2 && (!auto_on || !world_ok)) { if (want_slot >= 0) scan_next = fr + 60; mode = 0; seen = 0; }
+    if (!mode && auto_on && world_ok && fr >= scan_next) {
+        scan_next = fr + 15;
+        uint64_t p = ((uint64_t (*)(uint32_t))(b + 0x45f9d0))(*(uint32_t *)(uintptr_t)(b + 0x2d20e4c)); snap C;
+        if (p && take_snap(b, p, &C) && !rd(rd(p + 0x90) + 0x40)) {
+            if ((!seen || seen_pl != p || seen_sig != C.sig) && C.nbelt < C.boxes && (C.n[RED] || C.n[BLUE] || C.n[PURPLE])) {
+                mode = 2; moves = 0; want_slot = -1; next = 0; deadline = 0; g_ntried = 0; fails = 0;
+            }
+            seen = 1; seen_pl = p; seen_sig = C.sig;
+        }
+    }
+    if (!mode || fr < next) return;
+    const char *label = mode == 2 ? "局内自动补腰带" : "开背包补腰带";
     uint64_t pl = ((uint64_t (*)(uint32_t))(b + 0x45f9d0))(*(uint32_t *)(uintptr_t)(b + 0x2d20e4c)); snap S; char t[160];
-    if (!pl || !take_snap(b, pl, &S)) { active = 0; LOG("开背包补腰带：读不到玩家 / 物品栏，不动"); return; }
-    if (rd(rd(pl + 0x90) + 0x40)) { active = 0; LOG("开背包补腰带：手上拿着东西，停（已放 %d 瓶）", moves); return; }
-    int dm_ui_panel_shown(const char *name);
-    if (!moves && want_slot < 0 && !dm_ui_panel_shown("PlayerInventoryExpansionLayout")) { if (!deadline) deadline = fr + 60; if (fr < deadline) return; active = 0; LOG("开背包补腰带：物品栏 60 帧没显示出来，不补"); return; }   // 等物品栏真显示出来再看同时开着的面板：底座 / 方块的开面板消息先到，但面板树里要晚几帧才可见 | wait until the inventory panel is really shown before looking at panels open at the same time: the pedestal / cube open-panel message arrives first, but it only becomes visible in the panel tree a few frames later
-    if (dm_ui_panel_shown("ImbueItemsPanel") || dm_ui_panel_shown("HoradricCubeLayout")) { active = 0; LOG("开背包补腰带：开着底座 / 方块（物品栏随它一起开），不补（已放 %d 瓶）", moves); return; }   // 原版此时不收进腰带：0x3c1b28 照样放行，但发出的 0x53 不生效（dz 局，第 2 瓶 60 帧没进） | the original game does not accept items into the belt at this time: 0x3c1b28 still lets it through, but the 0x53 sent has no effect (dz run, the 2nd bottle did not go in within 60 frames)
+    if (!pl || !take_snap(b, pl, &S)) { if (mode == 2) seen = 0; mode = 0; LOG("%s：读不到玩家 / 物品栏，不动", label); return; }
+    if (rd(rd(pl + 0x90) + 0x40)) { if (mode == 2) seen = 0; mode = 0; LOG("%s：手上拿着东西，停（已放 %d 瓶）", label, moves); return; }
+    if (mode == 1 && !moves && want_slot < 0 && !dm_ui_panel_shown("PlayerInventoryExpansionLayout")) { if (!deadline) deadline = fr + 60; if (fr < deadline) return; mode = 0; LOG("开背包补腰带：物品栏 60 帧没显示出来，不补"); return; }   // 等物品栏真显示出来再看同时开着的面板 | wait until the inventory panel is really visible
+    if (dm_ui_panel_shown("ImbueItemsPanel") || dm_ui_panel_shown("HoradricCubeLayout")) { mode = 0; LOG("%s：开着底座 / 方块，不补（已放 %d 瓶）", label, moves); return; }
     if (want_slot >= 0 && !S.belt[want_slot]) { if (fr < deadline) return;
         uint64_t dm_diag_srv_item(uint32_t id); char srv[64], now[64]; item_where(dm_diag_srv_item(want_id), srv, sizeof srv);
         { uint64_t ci = ((uint64_t (*)(uint64_t, uint32_t, uint32_t, uint32_t))(b + 0x45f5f0))((uint64_t)(uintptr_t)(b + 0x2d603a0 + 4 * 0x400), want_id & 0x7f, want_id, 4); item_where(ci, now, sizeof now); }
-        LOG("【红】开背包补腰带：第 %d 瓶放进槽 %d 后 60 帧没见进腰带——物品 id %u，放之前客户端：%s；现在客户端：%s；服务端：%s。本轮跳过它，换下一瓶", moves, want_slot, want_id, want_cli, now, srv);
+        LOG("【红】%s：第 %d 瓶放进槽 %d 后 60 帧没见进腰带——物品 id %u，放之前客户端：%s；现在客户端：%s；服务端：%s。本轮跳过它，换下一瓶", label, moves, want_slot, want_id, want_cli, now, srv);
         if (g_ntried < 8) g_tried[g_ntried++] = want_id; if (!in_list(g_bad, g_nbad, want_id)) { if (g_nbad == 8) g_nbad = 7; g_bad[g_nbad++] = want_id; }
-        fails++; want_slot = -1; if (!take_snap(b, pl, &S)) { active = 0; return; } }   // 重新挑（排除了刚失败的这瓶） | pick again (excluding the bottle that just failed)
-    else if (want_slot >= 0 && in_list(g_bad, g_nbad, want_id)) { for (int i = 0; i < g_nbad; i++) if (g_bad[i] == want_id) { g_bad[i] = g_bad[--g_nbad]; break; } LOG("开背包补腰带：物品 id %u 上次放不进，这次进了，从失败名单拿掉", want_id); }
-    if (!moves && want_slot < 0) { belt_text(b, &S, t, sizeof t); LOG("开背包补腰带：开始，腰带 %d 格（%s），背包 红 %d 蓝 %d 紫 %d（%s），药水合计 %d", S.boxes, t, S.n[RED], S.n[BLUE], S.n[PURPLE], S.bag, S.nbelt + S.n[RED] + S.n[BLUE] + S.n[PURPLE]); }
+        fails++; want_slot = -1;
+        if (g_ntried == 8) { if (mode == 2) { seen = 1; seen_pl = pl; seen_sig = S.sig; } mode = 0; LOG("%s：本轮已有 8 瓶放不进去，等物品变化后再试", label); return; }
+        if (!take_snap(b, pl, &S)) { mode = 0; return; } }   // 重新挑（排除了刚失败的这瓶） | pick again (excluding the bottle that just failed)
+    else if (want_slot >= 0 && in_list(g_bad, g_nbad, want_id)) { for (int i = 0; i < g_nbad; i++) if (g_bad[i] == want_id) { g_bad[i] = g_bad[--g_nbad]; break; } LOG("%s：物品 id %u 上次放不进，这次进了，从失败名单拿掉", label, want_id); }
+    if (!moves && want_slot < 0) { belt_text(b, &S, t, sizeof t); LOG("%s：开始，腰带 %d 格（%s），背包 红 %d 蓝 %d 紫 %d（%s），药水合计 %d", label, S.boxes, t, S.n[RED], S.n[BLUE], S.n[PURPLE], S.bag, S.nbelt + S.n[RED] + S.n[BLUE] + S.n[PURPLE]); }
     want_slot = -1;
     // 落在哪个槽不由我们定：服务端收「移到腰带」包（0x53，main+0x6dfaf0）时自己用原版腰带找位 0x561de0 再算一遍，包里的槽和它算的不相等就整包拒收
     // （0x6dfd7c–0x6dfdc8）。原版找位的次序：第 1–4 列里底格与这瓶同类、还有空格的那一列（从左到右）→ 该列最低空格；都没有 → 最左边的空列底格。
@@ -159,15 +179,16 @@ void dm_beltauto_step(uint8_t *b) {   // 游戏主线程每帧（dm_world.c） |
         if (!r) { int want = c < 2 ? RED : BLUE;   // 空列：先认领色；认领色背包里没有 → 紫；紫也没有 → 让给背包里有的那种 | Empty column: claimed color first; claimed color not in the inventory → purple; no purple either → give the column to whichever kind the inventory has
             if (kd != want && S.best[want]) continue;                       // 认领色有货：别的颜色不顶 | Claimed color in stock: other colors do not substitute
             if (kd != want && kd != PURPLE && S.best[PURPLE]) continue; }   // 认领色没货但有紫：先补紫 | Claimed color out of stock but purple available: fill purple first
-        if (!(((int (*)(uint64_t))(b + 0x3c1b28))(it) & 1)) { active = 0; LOG("开背包补腰带：原版此刻不收这瓶进腰带（如开着底座 / 交易面板），停（已放 %d 瓶）", moves - fails); return; }   // 同双击补满的前置：原版判这件此刻能进腰带（dz：底座面板开着时第 2 瓶原版不收，等满 60 帧记了红） | same precondition as double-tap fill: the original game judges that this item can go into the belt right now (dz: with the pedestal panel open the original game did not accept the 2nd bottle, and a failure line was logged after waiting the full 60 frames)
+        if (!(((int (*)(uint64_t))(b + 0x3c1b28))(it) & 1)) { mode = 0; LOG("%s：原版此刻不收这瓶进腰带（如开着底座 / 交易面板），停（已放 %d 瓶）", label, moves - fails); return; }   // 同双击补满的前置 | same precondition as double-tap fill
         int slot = (int)ns; struct { uint32_t slot; uint8_t fixed; } tgt = { (uint32_t)slot, 1 };
         static int t_noput = -1; if (t_noput < 0) t_noput = getenv("DM_TEST_BELT_NOPUT") != NULL;   // 测试开关（造「这瓶服务端不收」的现场）：进程里挑中的第一瓶不真发，看失败后换下一瓶与诊断 | test switch (sets up the "the server does not accept this bottle" scenario): the first bottle picked in the process is not actually sent, to observe switching to the next bottle after the failure and the diagnostics
         if (t_noput == 1) { t_noput = 2; LOG("测试 DM_TEST_BELT_NOPUT：这一瓶不真发"); }
         else ((void (*)(uint64_t, uint64_t, uint8_t, int, void *))(b + 0x3c1cd0))(it, pl, *(uint8_t *)(uintptr_t)(rd(it + 0x10) + 0x55), 1, &tgt);
         moves++; want_slot = slot; next = fr + 6; deadline = fr + 60; want_id = *(uint32_t *)(uintptr_t)(it + 8); item_where(it, want_cli, sizeof want_cli);
-        LOG("开背包补腰带：背包「%.4s」→ 列 %d 第 %d 格（槽 %d，%s列）；物品 id %u，%s", (char *)&(uint32_t){ code_of(b, it) }, c + 1, r + 1, slot, r ? "同类" : "空", want_id, want_cli);
+        LOG("%s：背包「%.4s」→ 列 %d 第 %d 格（槽 %d，%s列）；物品 id %u，%s", label, (char *)&(uint32_t){ code_of(b, it) }, c + 1, r + 1, slot, r ? "同类" : "空", want_id, want_cli);
         return;
     }
-    active = 0; belt_text(b, &S, t, sizeof t);
-    LOG("开背包补腰带：完成，放了 %d 瓶；腰带（%s），背包剩 红 %d 蓝 %d 紫 %d（%s），药水合计 %d", moves - fails, t, S.n[RED], S.n[BLUE], S.n[PURPLE], S.bag, S.nbelt + S.n[RED] + S.n[BLUE] + S.n[PURPLE]);
+    if (mode == 2) { seen = 1; seen_pl = pl; seen_sig = S.sig; }
+    mode = 0; belt_text(b, &S, t, sizeof t);
+    LOG("%s：完成，放了 %d 瓶；腰带（%s），背包剩 红 %d 蓝 %d 紫 %d（%s），药水合计 %d", label, moves - fails, t, S.n[RED], S.n[BLUE], S.n[PURPLE], S.bag, S.nbelt + S.n[RED] + S.n[BLUE] + S.n[PURPLE]);
 }

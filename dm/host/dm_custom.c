@@ -33,27 +33,27 @@ static const char *const k_keys[] = { "lang",
 #if VOICE_ROW
     "voice",
 #endif
-    "auto_mana", "merc_pot", "drop_light", "map_mark", "item_notes", "icloud", "pot_pick", "drop_haptic", "gem_pick", "store_btn", "eco_fps", "q3d", "loot_filter", "auto_buff", "touch_swap_above", "cam", "spawn_rate" };   // 顺序 = 自定义页从上到下的行序（touch_layout.py _CUSTOM_ROWS）：手柄在这页按这个顺序上下选行 | Order = row order of the Custom page from top to bottom (touch_layout.py _CUSTOM_ROWS): the controller selects rows up/down on this page in this order
+    "auto_mana", "merc_pot", "drop_light", "map_mark", "item_notes", "icloud", "pot_pick", "belt_auto", "drop_haptic", "gem_pick", "store_btn", "eco_fps", "q3d", "loot_filter", "auto_buff", "touch_swap_above", "cam", "spawn_rate" };   // 顺序 = 自定义页从上到下的行序（touch_layout.py _CUSTOM_ROWS）：手柄在这页按这个顺序上下选行 | Order = row order of the Custom page from top to bottom (touch_layout.py _CUSTOM_ROWS): the controller selects rows up/down on this page in this order
 #define NK (int)(sizeof k_keys / sizeof *k_keys)
 static const int k_def[NK] = { 0,
 #if VOICE_ROW
     1,
 #endif
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 1 };   // spawn_rate=1 是原版 1×；省电模式缺省关、3D 画质缺省流畅优先（q3d=0）
+    1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0, 1 };   // belt_auto 缺省关；spawn_rate=1 是原版 1×；省电模式缺省关、3D 画质缺省流畅优先（q3d=0）
 // q3d（3D 画质）：0 = 流畅优先（掉帧就自动降 3D 比例）、1 = 画质优先（不自动降）。生效 = 调 hle_oe.c 的 dm_3d_quality_mode_set，读盘与点「应用」时当场调，下一帧控制器就按新档走。
 // 页上是上下两项单选（同语言行）：TouchCustom_q3d 是「画质优先」那格（勾上 = 1），TouchCustom_q3d_smooth 是它的反面
 // q3d (3D quality): 0 = smoothness first (automatically lowers the 3D scale on frame drops), 1 = quality first (no automatic lowering). Applied by calling hle_oe.c's dm_3d_quality_mode_set, immediately on load and on tapping "Apply", so the controller follows the new setting from the next frame.
 // On the page it is a stacked two-option radio (like the language row): TouchCustom_q3d is the "Quality first" cell (checked = 1), TouchCustom_q3d_smooth is its inverse
 #define K_VOICE (VOICE_ROW ? 1 : -2)   // 缺省包没有这一行：-2 不等于任何行号（也不等于 key_index 认不出时的 -1）
 #define K_MERC (2 + VOICE_ROW)
-#define K_Q3D (12 + VOICE_ROW)
-#define K_TOUCH_SWAP (15 + VOICE_ROW)
+#define K_Q3D (13 + VOICE_ROW)
+#define K_TOUCH_SWAP (16 + VOICE_ROW)
 // cam（镜头视角，实验）：三项单选 0 原版 / 1 越肩 / 2 第一人称，勾选框 TouchCustom_cam / _cam_ots / _cam_fp 互斥（同语言行），缺省 0；
 // 读盘与点「应用」时当场交给 dm_cam.c（dm_cam_set_mode），不用重启
 // cam (camera view, experimental): three-option radio 0 original / 1 over-the-shoulder / 2 first person, checkboxes TouchCustom_cam / _cam_ots / _cam_fp
 // mutually exclusive (like the language row), default 0; handed to dm_cam.c (dm_cam_set_mode) on load and on Apply, no restart needed
-#define K_CAM (16 + VOICE_ROW)
-#define K_SPAWN (17 + VOICE_ROW)   // 0/1/2/3 = 0.5×/1×/1.5×/2×；只在下一局生效 | global monster density and elite-pack multiplier, effective next run
+#define K_CAM (17 + VOICE_ROW)
+#define K_SPAWN (18 + VOICE_ROW)   // 0/1/2/3 = 0.5×/1×/1.5×/2×；只在下一局生效 | global monster density and elite-pack multiplier, effective next run
 #define CAM_N 3
 static const char *const k_cam_box[CAM_N] = { "TouchCustom_cam", "TouchCustom_cam_ots", "TouchCustom_cam_fp" };
 static const char *const k_cam_name[CAM_N] = { "off", "over-the-shoulder", "first-person" };   // 只进日志 | Log only
@@ -131,7 +131,7 @@ static void load_once(void) {
     for (int i = 0; i < NK; i++) { atomic_store(&g_val[i], v[i]); atomic_store(&g_pend[i], -1); }
     dm_cam_set_mode(v[K_CAM]);
     dm_3d_quality_mode_set(v[K_Q3D]); LOG("自定义设置：3D 画质读盘为%s（q3d=%d，已交给 3D 比例控制）", v[K_Q3D] ? "画质优先" : "流畅优先", v[K_Q3D]);
-    if (!atomic_exchange(&g_loaded, 1)) LOG("自定义设置：读盘 %s%s lang=%d%s%s auto_mana=%d merc_pot=%d drop_light=%d map_mark=%d item_notes=%d icloud=%d pot_pick=%d drop_haptic=%d gem_pick=%d store_btn=%d eco_fps=%d", p, f ? "" : "（没有文件，全按缺省）", v[0], lang < 0 ? "（没写，按当前语言）" : "", vlog, v[1 + VOICE_ROW], v[2 + VOICE_ROW], v[3 + VOICE_ROW], v[4 + VOICE_ROW], v[5 + VOICE_ROW], v[6 + VOICE_ROW], v[7 + VOICE_ROW], v[8 + VOICE_ROW], v[9 + VOICE_ROW], v[10 + VOICE_ROW], v[11 + VOICE_ROW]);
+    if (!atomic_exchange(&g_loaded, 1)) LOG("自定义设置：读盘 %s%s lang=%d%s%s auto_mana=%d merc_pot=%d drop_light=%d map_mark=%d item_notes=%d icloud=%d pot_pick=%d belt_auto=%d drop_haptic=%d gem_pick=%d store_btn=%d eco_fps=%d", p, f ? "" : "（没有文件，全按缺省）", v[0], lang < 0 ? "（没写，按当前语言）" : "", vlog, v[1 + VOICE_ROW], v[2 + VOICE_ROW], v[3 + VOICE_ROW], v[4 + VOICE_ROW], v[5 + VOICE_ROW], v[6 + VOICE_ROW], v[7 + VOICE_ROW], v[8 + VOICE_ROW], v[9 + VOICE_ROW], v[10 + VOICE_ROW], v[11 + VOICE_ROW], v[12 + VOICE_ROW]);
 }
 int dm_custom_get(const char *key) {
     load_once(); int i = key_index(key); if (i < 0) return 1;

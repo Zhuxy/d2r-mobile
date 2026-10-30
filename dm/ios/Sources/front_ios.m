@@ -139,7 +139,7 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
     uint64_t _modifierPublishEndNS,_modifierPublishEpoch;
     uint64_t _touchEventSeq,_touchReceiptSeq,_touchPublishedEventSeq; // 仅 DM_TOUCH_CONTROL_LOG 开启时推进 | Advanced only when DM_TOUCH_CONTROL_LOG is on
     UITouch *_pendEnd; double _pendEndTime,_pendWall; BOOL _pendFire,_finalAsked;   // 松手了但宿主的答案还没回：这根手指的「抬起」先挂着（见 finishTouches） | Released but the host's answer is not back yet: this finger's "lift" is held pending (see finishTouches)
-    int32_t _minLeft,_maxLeft; uint64_t _lastButtons; unsigned _touchAPresses,_touchShots; UITouch *_uiFinger; CGPoint _uiFeO; BOOL _uiFeDrag; BOOL _uiDragOn; UITouch *_mapTouch, *_bindTouch; UIView *_ghostDim; BOOL _ghostOn; uint64_t _bindKey; uint32_t _selId; double _statNext; double _tipUntil, _addAt; unsigned _mapWorldSeq; BOOL _mapWorldAsked; CGPoint _mapWorldPt; CGPoint _mapP0, _bindP0; double _mapT0; BOOL _pulseTicking; uint64_t _pulseEpoch,_pulseS0; double _pulseT0,_pulseSeen,_pulseFree; unsigned _itemSeq,_relSeq; BOOL _relAsked,_itemAsked; int _itemKind;
+    int32_t _minLeft,_maxLeft; uint64_t _lastButtons; unsigned _touchAPresses,_touchShots; UITouch *_uiFinger; CGPoint _uiFeO; BOOL _uiFeDrag; BOOL _uiDragOn; UITouch *_mapTouch, *_bindTouch; BOOL _mapWasHidden; UIView *_ghostDim; BOOL _ghostOn; uint64_t _bindKey; uint32_t _selId; double _statNext; double _tipUntil, _addAt; unsigned _mapWorldSeq; BOOL _mapWorldAsked; CGPoint _mapWorldPt; CGPoint _mapP0, _bindP0; double _mapT0; BOOL _pulseTicking; uint64_t _pulseEpoch,_pulseS0; double _pulseT0,_pulseSeen,_pulseFree; unsigned _itemSeq,_relSeq; BOOL _relAsked,_itemAsked; int _itemKind;
 }
 + (Class)layerClass { return CAMetalLayer.class; }
 - (instancetype)initWithFrame:(CGRect)f {
@@ -296,20 +296,25 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
 // 微缩地图以玩家为中心画在矩形中间，那片正是玩家往右上方点地面的位置——一份诊断日志里 24 次落在矩形里的点击 20 次在中间主体、0 次在顶部那条；
 // 点地面被切成全屏地图，右上角小地图没了）。矩形其余部分照常进手势层（点世界）。
 // 只在游戏态认；落在里面的手指不进手势层（不占摇杆 / 技能的手指槽、不发任何移动），点一下（位移 ≤ 14 点、0.6 秒内）= 切到全屏地图（宿主调游戏自己的「透视地图尺寸」变更回调，不落盘，见 dm_cursor.c ui_map_pump）。
-// 全屏地图开着时：再点小地图那一块、或点任何没落在技能键 / 摇杆区上的地方 = 回到小地图；摇杆照常走路、技能键照常放（开着全屏地图赶路是暗黑的常规玩法）。小地图常驻，不提供「关」。
+// 地图没显示时，右上安全区内另有 56×56 点的隐形热区：点一下走原版地图键开图。地图已显示时仍用上面的原有热区和切换逻辑。
 // Top-right minimap = map entry (the map is at the top right; no top icon wanted → draw nothing). The rectangle comes from the game's own AutoMap panel (the host reads it every half second and keeps the latest one while the panel is closed).
 // The tap area is only the area-name strip at the top of the rectangle (full width × 1/4 height, padded to 30 points if under 30, at most 0.4 of the rectangle height), not the whole block (the "minimap disappeared" issue in released builds: the whole rectangle takes 1/3 of screen width × 1/3 of screen height,
 // the miniature map is drawn centered on the player in the middle of the rectangle, and that area is exactly where the player taps the ground toward the upper right -- in one diagnostic log, of 24 taps inside the rectangle 20 were in the middle body and 0 on the top strip;
 // ground taps were turned into the fullscreen map and the top-right minimap was gone). The rest of the rectangle goes into the gesture layer as usual (world tap).
 // Recognized only in game mode; fingers landing inside do not enter the gesture layer (no stick / skill finger slot taken, no movement sent), and one tap (displacement ≤ 14 points, within 0.6 seconds) = switch to the fullscreen map (the host calls the game's own 「透视地图尺寸」(Automap Size) change callback, not persisted, see dm_cursor.c ui_map_pump).
-// With the fullscreen map open: tapping the minimap block again, or anywhere not on a skill button / stick area = back to the minimap; the stick still walks and skill buttons still cast (travelling with the fullscreen map open is normal Diablo play). The minimap is always shown; there is no way to close it.
+// When no map is visible, an invisible 56×56-point target inside the top-right safe area sends the original map key to open it. Once visible, the existing hit area and switching behavior remain in effect.
 - (BOOL)minimapRect:(CGRect *)whole tap:(CGRect *)tap {   // 小地图矩形与其中的点击区（本视图的点）；没有矩形返回 NO | Minimap rectangle and the tap area inside it (points in this view); returns NO if there is no rectangle
     float r[4]; CGSize z=self.bounds.size; if(z.width<=0 || !dm_ui_minimap_rect(r)) return NO;
     CGFloat x0=r[0]*z.width, y0=r[1]*z.height, w=(r[2]-r[0])*z.width, h=(r[3]-r[1])*z.height, band=h/4; if(band<30) band=MIN(30,h*0.4);
     if(whole) *whole=CGRectMake(x0,y0,w,h); if(tap) *tap=CGRectMake(x0,y0,w,band); return YES;
 }
+- (CGRect)hiddenMapTapRect { UIEdgeInsets si=self.safeAreaInsets; CGSize z=self.bounds.size;
+    return CGRectMake(z.width-si.right-56,si.top+8,56,56); }
 - (BOOL)inMinimap:(CGPoint)p {
-    CGRect tap; if(_navigation || ![self minimapRect:NULL tap:&tap]) return NO;
+    if(_navigation) return NO;
+    CGRect tap; float cell=0;
+    if(dm_ui_map_geom(&cell)==0) tap=[self hiddenMapTapRect];
+    else if(![self minimapRect:NULL tap:&tap]) return NO;
     int control=dm_tc_hit(&_controls.layout,(float)p.x,(float)p.y);
     if(control>=0 || control==DM_TC_SWAP) return NO;   // 落在控件命中圆上的点归控件（回城钮挪到技能弧上方后在营地里被小地图矩形盖住） | Points landing on a widget's hit circle belong to the widget (after the town portal button moved above the skill arc it is covered by the minimap rectangle in camp)
     return CGRectContainsPoint(tap,p);
@@ -578,7 +583,7 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
         { int ex=0; _controls.belt_rows=dm_belt_rows(&ex); _controls.belt_open=ex; CGPoint q=[t locationInView:self];   // 腰带展开着点别处：先收腰带，这一下不再做别的（不开地图、不点世界、不进绑定） | Tapping elsewhere while the belt is expanded: collapse the belt first, and this tap does nothing else (no map, no world tap, no binding)
           if(dm_tc_belt_outside(&_controls,q.x,q.y)) { dm_belt_expand(0); LOG("前端：腰带展开着点别处 (%.0f,%.0f) → 只收腰带",q.x,q.y); continue; } }
         if(!_navigation && !_bindTouch && !dm_ui_bind_active()) { BOOL em=NO; CGPoint bp=[t locationInView:self]; uint64_t bk=[self skillKeyAt:bp empty:&em]; if(bk && em) { _bindTouch=t; _bindKey=bk; _bindP0=bp; _mapT0=CACurrentMediaTime(); continue; } }
-        if(!_mapTouch && [self inMinimap:[t locationInView:self]]) { _mapTouch=t; _mapP0=[t locationInView:self]; _mapT0=CACurrentMediaTime(); continue; }
+        if(!_mapTouch && [self inMinimap:[t locationInView:self]]) { float cell=0; _mapTouch=t; _mapWasHidden=dm_ui_map_geom(&cell)==0; _mapP0=[t locationInView:self]; _mapT0=CACurrentMediaTime(); continue; }
         for(int i=0;i<16;i++) if(!_slot[i]) {
             _slot[i]=t; CGPoint p=[t locationInView:self]; { int ex=0; _controls.belt_rows=dm_belt_rows(&ex); _controls.belt_open=ex; } { int dm_cam_mode(void); _controls.cam_on=dm_cam_mode(); } dm_tc_begin_at(&_controls,i,p.x,p.y,CACurrentMediaTime()); slot=i;
             if(!_navigation && _controls.finger[i].target==DM_TC_PORTAL) { void dm_tp_request(void); dm_tp_request(); LOG("前端：点回城钮 → 免费回城"); }   // 不要回城书 / 卷轴（宿主 dm_freetp.c） | No Tome of Town Portal / scroll needed (host dm_freetp.c)
@@ -650,7 +655,8 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
                 // 小图态先把这一下交给世界点按（有目标 = 交互，没有目标什么都不发），答「没有目标」再切全屏；全屏态保持原样（点这一块 = 切回）。
                 // Under the minimap block there is also the game world: when an NPC / object / dropped item stands there, tapping it should be an interaction rather than a map switch (Charsi could not be tapped in front of the smithy).
                 // In minimap state this tap is first given to the world tap (target = interact, no target sends nothing), and only on a "no target" answer switch to fullscreen; fullscreen state is unchanged (tapping this block = switch back).
-                if(dm_ui_map_is_full()) { dm_ui_map_full(0); LOG("前端：点小地图那一块 (%.0f,%.0f) → 回小地图",p.x,p.y); }
+                if(_mapWasHidden) { dm_ui_map_open(); LOG("前端：点右上角 (%.0f,%.0f) → 请求打开地图",p.x,p.y); }
+                else if(dm_ui_map_is_full()) { dm_ui_map_full(0); LOG("前端：点小地图那一块 (%.0f,%.0f) → 回小地图",p.x,p.y); }
                 else if(z.width>0) { { float wx,wy; world_norm(self,p.x,p.y,&wx,&wy); _mapWorldSeq=dm_world_tap(wx,wy); } _mapWorldAsked=YES; _mapWorldPt=p; } }
             continue; }
         if(t==_bindTouch) { CGPoint p=[t locationInView:self]; _bindTouch=nil;
@@ -756,8 +762,8 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
 - (void)touchesEnded:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { (void)e; [self finishTouches:ts phase:"ended"]; }
 - (void)touchesCancelled:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { (void)e; [self finishTouches:ts phase:"cancelled"]; }
 - (CGPoint)scriptPoint:(NSString *)spec move:(BOOL)move {
-    // 数字对 "x,y"（点）或 "@目标[+dx,dy]"：目标 = joy/swap/main/skill1-4/portal/belt1-4/menu/map/mmname（小地图点击区中心）/mmbody（小地图矩形中心）
-    // Number pair "x,y" (points) or "@target[+dx,dy]": target = joy/swap/main/skill1-4/portal/belt1-4/menu/map/mmname (center of the minimap tap area)/mmbody (center of the minimap rectangle)
+    // 数字对 "x,y"（点）或 "@目标[+dx,dy]"：目标 = joy/swap/main/skill1-4/portal/belt1-4/menu/map/mmcorner（无地图时的右上角热区）/mmname（小地图点击区中心）/mmbody（小地图矩形中心）
+    // Number pair "x,y" (points) or "@target[+dx,dy]": target = joy/swap/main/skill1-4/portal/belt1-4/menu/map/mmcorner (top-right target when hidden)/mmname (minimap tap-area center)/mmbody (minimap rectangle center)
     CGPoint base=CGPointZero; NSString *rest=spec; BOOL absPt=[spec hasPrefix:@"="]; if(absPt) rest=[spec substringFromIndex:1];   // 「=x,y」：已是本视图里的点（tap_unit / tap_ui 自己算出来的落点），不做 DM_TOUCH_REF 换算 | "=x,y": already a point in this view (a landing point computed by tap_unit / tap_ui itself), no DM_TOUCH_REF conversion
     if([spec hasPrefix:@"@"]) {
         NSRange r=[spec rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"+"]];
@@ -768,6 +774,7 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
         if([name isEqualToString:@"joy"]) base=CGPointMake(_controls.layout.joy_x,_controls.layout.joy_y);
         else if([name isEqualToString:@"swap"]) base=CGPointMake(_controls.layout.swap.x,_controls.layout.swap.y);
         else if(i!=NSNotFound) base=CGPointMake(_controls.layout.target[i].x,_controls.layout.target[i].y);
+        else if([name isEqualToString:@"mmcorner"]) { CGRect q=[self hiddenMapTapRect]; base=CGPointMake(CGRectGetMidX(q),CGRectGetMidY(q)); }
         else if([name isEqualToString:@"mmname"] || [name isEqualToString:@"mmbody"]) { CGRect wh,tp;
             if([self minimapRect:&wh tap:&tp]) { CGRect q=[name isEqualToString:@"mmname"]?tp:wh; base=CGPointMake(CGRectGetMidX(q),CGRectGetMidY(q));
                 LOG("[script] 小地图：矩形 x %.0f–%.0f y %.0f–%.0f 点，点击区 y %.0f–%.0f（高 %.0f 点）；%s = (%.0f,%.0f)",wh.origin.x,CGRectGetMaxX(wh),wh.origin.y,CGRectGetMaxY(wh),tp.origin.y,CGRectGetMaxY(tp),tp.size.height,name.UTF8String,base.x,base.y); }

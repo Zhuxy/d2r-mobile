@@ -99,6 +99,7 @@ void dm_ui_drag_lift(float ny);   // 起拖前报物品图抬在手指上方多�
 // 右上角小地图（游戏的 AutoMap 面板）在出图画面里的矩形，归一化 [0,1]：r = 左、上、右、下。返回 1 = 读到过（面板关着时给最近一次的）；任意线程调
 // Rectangle of the top-right minimap (the game's AutoMap panel) in the rendered picture, normalized [0,1]: r = left, top, right, bottom. Returns 1 = has been read (the most recent one is given while the panel is closed); callable from any thread
 int dm_ui_minimap_rect(float r[4]);
+void dm_ui_map_open(void);   // 触屏右上角在地图未显示时请求原版地图键；仅局内且地图仍关闭时执行 | Request the original map key from the touch corner; executed only in-game while the map is still closed
 // 全屏地图 ↔ 小地图（运行时切，不落盘）：dm_ui_map_full(1) 切全屏、(0) 回玩家设置的那档小地图；dm_ui_map_is_full() = 游戏当前是不是全屏地图（任意线程调，主线程每帧刷新）
 // 技能绑定的触摸流程（前端任意线程调，主线程每帧推进）：dm_ui_bind_begin(键) = 给这个手柄键（可带 ZL = 第二组）选技能——宿主打开技能树，
 // 玩家点一个技能（前端在流程进行中把点按改成「光标到点 + 按 Y」）→ 弹出原版「重新绑定技能」框 → 宿主替他按目标键 → 关面板。dm_ui_bind_active() = 流程进行中（0 无 / 1 正在开技能树 / 2 等玩家点技能 / 3 收尾）

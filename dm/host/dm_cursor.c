@@ -1972,6 +1972,8 @@ static void ui_map_center(module_t *m, uint64_t root, int mini) {
 // so the minimap stayed gone until a restart (player report: after the A1→A2 / A2→A3 NPC act change the top-right minimap disappeared). In touch mode, with that option on, once the cutscene is over and the run is back, press the map key once for the player:
 // the original map-opening path, which brings the area name back too (sending only PanelManager:OpenPanel AutoMap brought the lines back but not the area name at the top right, measured on the host).
 static _Atomic int g_map_movie;
+static _Atomic int g_map_open_req;
+void dm_ui_map_open(void) { atomic_store(&g_map_open_req, 1); }
 static void ui_map_pump(module_t *m, uint64_t root) {
 #if defined(__OHOS__)
     // 鸿蒙的 UI 线程可能在选角面板加载时先请求收起地图；此时原版 AutoMap 尚未创建，回调会解引用空对象。
@@ -2008,8 +2010,12 @@ static void ui_map_pump(module_t *m, uint64_t root) {
         static int n; if (n++ < 40) LOG("地图：→ %s（%s；配置值 %d 不动）", want ? "全屏" : small == 1 ? "微缩放左" : "微缩放右", hold ? "面板开着先让开" : g_map_want ? "玩家要全屏" : "玩家要小地图", cfg); }
     atomic_store(&g_map_full_now, mini == 0);
     { void dm_ui_key_pulse_alone(uint64_t mask, int frames); uint64_t am = ui_panel(root, "AutoMap"); static uint64_t sent;
-      if (am && *(uint64_t *)am == (uint64_t)m->base + 0x20c58a0 && !*(uint8_t *)(am + 0x50) && *(volatile int32_t *)(m->base + 0x2d485b4) && hi.valid && dm_uiscreen_ingame() && !atomic_load(&g_map_movie)) {
-          uint64_t fr = dm_guest_frame(); if (!sent || fr >= sent + 120) { sent = fr; dm_ui_key_pulse_alone(DM_BTN_MINUS, 4); LOG("地图：局内小地图关着（过场关的）、选项「进局自动开启地图」开着 → 替玩家按一下地图键（−）"); } } }
+      int in_game = hi.valid && dm_uiscreen_ingame(), req = atomic_load(&g_map_open_req);
+      if (!in_game) atomic_store(&g_map_open_req, 0);
+      else if (am && *(uint64_t *)am == (uint64_t)m->base + 0x20c58a0) {
+          if (*(uint8_t *)(am + 0x50)) atomic_store(&g_map_open_req, 0);   // 地图已由游戏自己打开，不再补按一次导致关闭 | Already opened by the game: do not send a second key press that would close it
+          else if ((req || *(volatile int32_t *)(m->base + 0x2d485b4)) && !atomic_load(&g_map_movie)) {
+              uint64_t fr = dm_guest_frame(); if (!sent || fr >= sent + 120) { sent = fr; atomic_store(&g_map_open_req, 0); dm_ui_key_pulse_alone(DM_BTN_MINUS, 4); LOG("地图：局内地图关着（%s）→ 替玩家按一下地图键（−）", req ? "右上角点按" : "自动开启选项"); } } } }
 }
 // ---------- 右上角小地图的位置：触摸层把它当点击区（点一下 = 地图开关键），矩形取游戏自己的 AutoMap 面板，不写死 ----------
 // AutoMap 控件（虚表 main+0x20c58a0）：+0x70 / +0x74 = x / y、+0x78 / +0x7c = 宽 / 高（布局单位，2160 = 画面高；微缩地图放右时 x = −宽，即贴着画面右边），+0x80 缩放。

@@ -68,6 +68,7 @@ English: [README.md](README.md)
 
 | 文件 | 管什么 |
 |---|---|
+| `dm_spawn.c`、`dm_spawn.h` | 每局按自定义的全局倍率调整各地图的普通怪密度和精英组数 |
 | `dm_rift.c`、`dm_rift.h` | 秘境：进门、抽图、进度、守护者、计时与层数结算 |
 | `dm_rift_ui.c` | 秘境面板，用原版控件搭 |
 | `dm_doorspot.h` | 秘境结算处两扇门落在哪：保证落在玩家走得到的格上。纯算法 |

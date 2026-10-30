@@ -29,6 +29,14 @@ for name in ('TouchCustom_touch_swap_above', 'TouchCustom_touch_swap_above_near'
     assert nodes[name]['type'] == 'ToggleButtonWidget'
     assert nodes[name]['fields']['onClickMessage'].endswith(name)
 assert nodes['TouchCustom_touch_swap_above_Text']['fields']['rect']['height'] == 360
+spawn_boxes = ('TouchCustom_spawn_rate', 'TouchCustom_spawn_rate_100', 'TouchCustom_spawn_rate_150', 'TouchCustom_spawn_rate_200')
+assert nodes['TouchCustom_spawn_rate_Text']['fields']['rect']['height'] == 720
+for name in spawn_boxes:
+    assert nodes[name]['type'] == 'ToggleButtonWidget'
+    assert nodes[name]['fields']['onClickMessage'].endswith(name)
+for suffix in ('050', '100', '150', '200'):
+    assert any(n.get('fields', {}).get('text') == '@dmCustomSpawnRate' + suffix for n in nodes.values())
+    assert any(n.get('fields', {}).get('text') == '@dmCustomSpawnRate' + suffix + 'Hint' for n in nodes.values())
 for suffix in ('Near', 'Far'):
     assert any(n.get('fields', {}).get('text') == '@dmCustomTouchSwap' + suffix for n in nodes.values())
 host_src = (root / 'host/dm_custom.c').read_text()
@@ -44,7 +52,8 @@ for voice in (False, True):
     assert ('voice' in keys) == voice
     defaults = [int(x) for x in re.search(r'k_def\[NK\].*?=\s*\{(.*?)\}', host, re.S)[1].split(',')]
     assert len(defaults) == len(keys) and defaults[keys.index('touch_swap_above')] == 0
+    assert defaults[keys.index('spawn_rate')] == 1
 os.environ.pop('MOVIE_FFMPEG'); layout = importlib.reload(layout)
 host = host_src
 assert 'TouchCustom_touch_swap_above_near' in host
-print('PASS touch layout options: generated radio pair, labels, defaults, host order (default and MOVIE_FFMPEG=1) and scrolling row extent')
+print('PASS touch layout options: generated radio choices, labels, defaults, host order (default and MOVIE_FFMPEG=1) and scrolling row extent')

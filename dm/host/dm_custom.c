@@ -1,11 +1,11 @@
-// 「自定义」设置：我们自己加的功能的启停开关。接口见 dm_custom.h。
-// 存储：存档提交目录旁的 sw_custom.txt（iOS 上在 Documents 里，升级包不丢），一行一个「键=0/1」；没有这个文件 / 没写的键 = 各键缺省（省电模式关，其余开）；不认识的行（旧版的 drop_filter、ver）读时跳过。
+// 「自定义」设置：我们自己加的功能开关与档位。接口见 dm_custom.h。
+// 存储：存档提交目录旁的 sw_custom.txt（iOS 上在 Documents 里，升级包不丢），一行一个「键=值」；没写的键取缺省值；不认识的行读时跳过。
 // 掉落筛选照红叶 mod 一件都不藏，整块拆掉，drop_filter 键与它的 ver=2 迁移一起删了
 // 不写进游戏自己的设置存档：不依赖它的格式与写盘时机，应用 / 放弃 / 默认由我们自己按原版选项页的语义做。
 // 界面：选项面板「自定义」页（借原版视频页 VideoOptionsPanel），每行一个原版勾选框，控件名 TouchCustom_<键>（布局 touch_layout.py 的 _custom_page）。勾选只记成待定值，
 // 「应用」（OptionsPanelMessage:AcceptChanges）才生效并存盘，「放弃」（CancelChanges）丢掉待定值，「默认」（ResetToDefaults）待定值回各键缺省（省电模式关、其余开；还要点应用）
-// 「自定义」(Custom) settings: on/off switches for the features we added ourselves. For the interface see dm_custom.h.
-// Storage: sw_custom.txt next to the save commit directory (on iOS it is in Documents and survives app upgrades), one 'key=0/1' per line; without this file / for keys not written = each key's default (power-saving mode off, the rest on); unrecognized lines (drop_filter and ver from old versions) are skipped when reading.
+// 「自定义」(Custom) settings: feature switches and enumerated choices. For the interface see dm_custom.h.
+// Storage: sw_custom.txt next to the save commit directory (on iOS it is in Documents and survives app upgrades), one 'key=value' per line; an absent key takes its default; unrecognized lines are skipped.
 // Drop filtering follows the Hongye community mod and hides nothing, so the whole block was removed, and the drop_filter key was deleted together with its ver=2 migration
 // Not written into the game's own settings save: no dependence on its format or on when it writes to disk; apply / discard / default are done by ourselves following the semantics of the original game's options page.
 // UI: the 「自定义」(Custom) page of the options panel (borrowing the original game's video page VideoOptionsPanel), one original-game checkbox per row, widget name TouchCustom_<key> (_custom_page in the layout touch_layout.py). Checking only records a pending value;
@@ -33,13 +33,13 @@ static const char *const k_keys[] = { "lang",
 #if VOICE_ROW
     "voice",
 #endif
-    "auto_mana", "merc_pot", "drop_light", "map_mark", "item_notes", "icloud", "pot_pick", "drop_haptic", "gem_pick", "store_btn", "eco_fps", "q3d", "loot_filter", "auto_buff", "touch_swap_above", "cam" };   // 顺序 = 自定义页从上到下的行序（touch_layout.py _CUSTOM_ROWS）：手柄在这页按这个顺序上下选行 | Order = row order of the Custom page from top to bottom (touch_layout.py _CUSTOM_ROWS): the controller selects rows up/down on this page in this order
+    "auto_mana", "merc_pot", "drop_light", "map_mark", "item_notes", "icloud", "pot_pick", "drop_haptic", "gem_pick", "store_btn", "eco_fps", "q3d", "loot_filter", "auto_buff", "touch_swap_above", "cam", "spawn_rate" };   // 顺序 = 自定义页从上到下的行序（touch_layout.py _CUSTOM_ROWS）：手柄在这页按这个顺序上下选行 | Order = row order of the Custom page from top to bottom (touch_layout.py _CUSTOM_ROWS): the controller selects rows up/down on this page in this order
 #define NK (int)(sizeof k_keys / sizeof *k_keys)
 static const int k_def[NK] = { 0,
 #if VOICE_ROW
     1,
 #endif
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0 };   // 缺省值：省电模式（30 帧）缺省关、3D 画质缺省流畅优先（q3d=0），换组默认在传送门左侧，其余缺省开（voice 的缺省不用：读盘时按当前语言定、「默认」不管它）
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 1 };   // spawn_rate=1 是原版 1×；省电模式缺省关、3D 画质缺省流畅优先（q3d=0）
 // q3d（3D 画质）：0 = 流畅优先（掉帧就自动降 3D 比例）、1 = 画质优先（不自动降）。生效 = 调 hle_oe.c 的 dm_3d_quality_mode_set，读盘与点「应用」时当场调，下一帧控制器就按新档走。
 // 页上是上下两项单选（同语言行）：TouchCustom_q3d 是「画质优先」那格（勾上 = 1），TouchCustom_q3d_smooth 是它的反面
 // q3d (3D quality): 0 = smoothness first (automatically lowers the 3D scale on frame drops), 1 = quality first (no automatic lowering). Applied by calling hle_oe.c's dm_3d_quality_mode_set, immediately on load and on tapping "Apply", so the controller follows the new setting from the next frame.
@@ -53,9 +53,13 @@ static const int k_def[NK] = { 0,
 // cam (camera view, experimental): three-option radio 0 original / 1 over-the-shoulder / 2 first person, checkboxes TouchCustom_cam / _cam_ots / _cam_fp
 // mutually exclusive (like the language row), default 0; handed to dm_cam.c (dm_cam_set_mode) on load and on Apply, no restart needed
 #define K_CAM (16 + VOICE_ROW)
+#define K_SPAWN (17 + VOICE_ROW)   // 0/1/2/3 = 0.5×/1×/1.5×/2×；只在下一局生效 | global monster density and elite-pack multiplier, effective next run
 #define CAM_N 3
 static const char *const k_cam_box[CAM_N] = { "TouchCustom_cam", "TouchCustom_cam_ots", "TouchCustom_cam_fp" };
 static const char *const k_cam_name[CAM_N] = { "off", "over-the-shoulder", "first-person" };   // 只进日志 | Log only
+#define SPAWN_N 4
+static const char *const k_spawn_box[SPAWN_N] = { "TouchCustom_spawn_rate", "TouchCustom_spawn_rate_100", "TouchCustom_spawn_rate_150", "TouchCustom_spawn_rate_200" };
+static const char *const k_spawn_name[SPAWN_N] = { "0.5x", "1x", "1.5x", "2x" };
 void dm_cam_set_mode(int m);
 void dm_3d_quality_mode_set(int mode);
 static const char *rev_box(int i) { return i == K_VOICE ? "TouchCustom_voice_zh" : i == K_Q3D ? "TouchCustom_q3d_smooth" : i == K_TOUCH_SWAP ? "TouchCustom_touch_swap_above_near" : NULL; }   // 单选行「反面那一项」的勾选框 | Checkbox of the radio row's "inverse option"
@@ -104,6 +108,7 @@ static void load_once(void) {
     while (f && fgets(ln, sizeof ln, f)) { char *eq = strchr(ln, '='); if (!eq) continue; *eq = 0; int i = key_index(ln); if (i > 0) v[i] = eq[1] != '0';
         if (i == 0) { int l = atoi(eq + 1); if (l >= 0 && l < LANG_N) lang = v[0] = l; }
         if (i == K_CAM) { int c = atoi(eq + 1); v[K_CAM] = c >= 0 && c < CAM_N ? c : 0; }
+        if (i == K_SPAWN) { int c = atoi(eq + 1); v[K_SPAWN] = c >= 0 && c < SPAWN_N ? c : 1; }
 #if VOICE_ROW
         if (i == K_VOICE) { int x = atoi(eq + 1); if (x == 0 || x == 1) voice = v[K_VOICE] = x; }
 #endif
@@ -148,7 +153,7 @@ void dm_custom_on_uimsg(const char *cat, const char *act, const char *arg) {
     (void)arg; if (!cat || !act || strcmp(cat, "OptionsPanelMessage")) return;
     load_once();
     if (!strcmp(act, "AcceptChanges")) { int ch = 0;
-        for (int i = 0; i < NK; i++) { int pd = atomic_exchange(&g_pend[i], -1); if (pd >= 0 && pd != atomic_load(&g_val[i])) { atomic_store(&g_val[i], pd); ch = 1; if (i == K_CAM) dm_cam_set_mode(pd); if (i == K_Q3D) { int dm_3d_quality_mode_get(void); float dm_3d_scale_cur(void); dm_3d_quality_mode_set(pd); LOG("自定义设置：3D 画质 → %s（已交给 3D 比例控制，读回模式 %d，此刻 3D 比例 %.2f）", pd ? "画质优先" : "流畅优先", dm_3d_quality_mode_get(), dm_3d_scale_cur()); } if (i == 0) atomic_store(&g_lang_explicit, pd); if (i == K_VOICE) atomic_store(&g_voice_explicit, pd); if (i == K_MERC) atomic_store(&g_merc_explicit, pd); if (i == 0) LOG("自定义设置：语言 → %s（应用；下次启动生效）", k_lang_name[pd]); else if (i == K_VOICE) LOG("自定义设置：配音 → %s（应用；下次启动生效）", pd ? "English" : "中文"); else LOG("自定义设置：%s → %s（应用）", k_keys[i], pd ? "开" : "关"); } }
+        for (int i = 0; i < NK; i++) { int pd = atomic_exchange(&g_pend[i], -1); if (pd >= 0 && pd != atomic_load(&g_val[i])) { atomic_store(&g_val[i], pd); ch = 1; if (i == K_CAM) dm_cam_set_mode(pd); if (i == K_Q3D) { int dm_3d_quality_mode_get(void); float dm_3d_scale_cur(void); dm_3d_quality_mode_set(pd); LOG("自定义设置：3D 画质 → %s（已交给 3D 比例控制，读回模式 %d，此刻 3D 比例 %.2f）", pd ? "画质优先" : "流畅优先", dm_3d_quality_mode_get(), dm_3d_scale_cur()); } if (i == 0) atomic_store(&g_lang_explicit, pd); if (i == K_VOICE) atomic_store(&g_voice_explicit, pd); if (i == K_MERC) atomic_store(&g_merc_explicit, pd); if (i == 0) LOG("自定义设置：语言 → %s（应用；下次启动生效）", k_lang_name[pd]); else if (i == K_VOICE) LOG("自定义设置：配音 → %s（应用；下次启动生效）", pd ? "English" : "中文"); else if (i == K_SPAWN) LOG("自定义设置：怪物数量 → %s（下一局生效）", k_spawn_name[pd]); else LOG("自定义设置：%s → %s（应用）", k_keys[i], pd ? "开" : "关"); } }
         if (ch) save(); }
     else if (!strcmp(act, "CancelChanges")) { for (int i = 0; i < NK; i++) atomic_store(&g_pend[i], -1); atomic_store(&g_repaint, 1); }
     else if (!strcmp(act, "ResetToDefaults")) { for (int i = 1 + VOICE_ROW; i < NK; i++) atomic_store(&g_pend[i], k_def[i]); atomic_store(&g_repaint, 1); }   // 从 1 起（有配音行时从 2 起）：语言与单独配音那一格不归「默认」管
@@ -216,6 +221,9 @@ void dm_custom_ui_pump(unsigned long long root) {
           if ((ev & DM_BTN_A) && cw && dm_wref_get(&seen[sel]) == cw) {
               if (sel == K_VOICE || sel == K_Q3D || sel == K_TOUCH_SWAP) { int p0 = atomic_load(&g_pend[sel]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[sel]); atomic_store(&g_pend[sel], !sh); set_toggle(cw, !sh); { uint64_t z = find_w(sp, rev_box(sel), 0); if (z) set_toggle(z, sh); }
                   LOG("自定义设置：%s → %d（手柄 A 在两项间切换；点「应用」生效）",k_keys[sel],!sh); }
+              else if (sel == K_SPAWN) { int p0 = atomic_load(&g_pend[K_SPAWN]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[K_SPAWN]), to = (sh + 1) % SPAWN_N; atomic_store(&g_pend[K_SPAWN], to);
+                  for (int k = 0; k < SPAWN_N; k++) { uint64_t z = find_w(sp, k_spawn_box[k], 0); if (z) set_toggle(z, k == to); }
+                  LOG("自定义设置：怪物数量 → %s（点「应用」后下一局生效）", k_spawn_name[to]); }
               else if (sel == K_CAM) { int p0 = atomic_load(&g_pend[K_CAM]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[K_CAM]), to = (sh + 1) % CAM_N; atomic_store(&g_pend[K_CAM], to);   // 镜头视角三项：A 依次轮换 | camera view: A cycles through the three
                   for (int k = 0; k < CAM_N; k++) { uint64_t z = find_w(sp, k_cam_box[k], 0); if (z) set_toggle(z, k == to); }
                   LOG("自定义设置：镜头视角 → %s（手柄 A 在三项间轮换；点「应用」生效）", k_cam_name[to]); }
@@ -238,7 +246,8 @@ void dm_custom_ui_pump(unsigned long long root) {
               if (top < off) { lf = f; dm_ui_wheel_on(sv, 1); } else if (bot > off + vh) { lf = f; dm_ui_wheel_on(sv, -1); } } } }
     radio_pump(sp, 0, k_lang_box, k_lang_name, LANG_N, &seen[0]);   // 语言行：五项单选，存一个键 lang | language row: five-option radio, one key lang
     radio_pump(sp, K_CAM, k_cam_box, k_cam_name, CAM_N, &seen[K_CAM]);   // 镜头视角：三项单选，存一个键 cam | camera view: three-option radio, one key cam
-    for (int i = 1; i < NK; i++) { if (i == K_CAM) continue; char nm[48]; snprintf(nm, sizeof nm, "TouchCustom_%s", k_keys[i]);   // 镜头行是三项单选，在 radio_pump 里 | the camera row is a three-option radio, handled in radio_pump
+    radio_pump(sp, K_SPAWN, k_spawn_box, k_spawn_name, SPAWN_N, &seen[K_SPAWN]);
+    for (int i = 1; i < NK; i++) { if (i == K_CAM || i == K_SPAWN) continue; char nm[48]; snprintf(nm, sizeof nm, "TouchCustom_%s", k_keys[i]);   // 多项单选行在 radio_pump 里 | multi-option radio rows are handled in radio_pump
         uint64_t w = find_w(sp, nm, 0); if (!w || !*(uint8_t *)(w + 0x50)) continue;
         int pd0 = atomic_load(&g_pend[i]), want = pd0 >= 0 ? pd0 : atomic_load(&g_val[i]);
         uint64_t z = rev_box(i) ? find_w(sp, rev_box(i), 0) : 0;   // 两项单选行（3D 画质：上下的「流畅优先」「画质优先」；换组位置）：存的仍是一个键，反面那一项是它的反面 | Two-option radio rows (3D quality: "Smoothness first" / "Quality first" stacked; swap-group position): still stores one key, the other option is its negation

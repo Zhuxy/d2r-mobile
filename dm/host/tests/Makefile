@@ -45,6 +45,7 @@ run: \
 	$(B)/t_warp_diag \
 	$(B)/t_romfs_validate \
 	$(B)/t_rwlv \
+	$(B)/t_spawn \
 	$(B)/t_swkbd \
 	$(B)/t_target_rank \
 	$(B)/t_textbox \
@@ -74,6 +75,7 @@ run: \
 	$(B)/t_rift_wave
 	$(B)/t_textbox
 	$(B)/t_rwlv
+	$(B)/t_spawn
 	$(B)/t_touch
 	$(B)/t_hid_script 2>/dev/null
 	$(B)/t_hid_receipt 2>/dev/null
@@ -114,6 +116,8 @@ $(B)/t_textbox: t_textbox.c ../dm_textbox_core.c ../dm_textbox_core.h | $(B)
 	clang -O1 -Wall -Werror -o $@ t_textbox.c ../dm_textbox_core.c
 $(B)/t_rwlv: t_rwlv.c ../dm_rwlv_core.c ../dm_rwlv_core.h | $(B)
 	clang -O1 -Wall -Werror -o $@ t_rwlv.c ../dm_rwlv_core.c
+$(B)/t_spawn: t_spawn.c ../dm_spawn.c ../dm_spawn.h ../dm_custom.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_spawn.c ../dm_spawn.c
 $(B)/t_doorspot: t_doorspot.c ../dm_doorspot.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_doorspot.c
 $(B)/t_widget: t_widget.c ../dm_widget.h | $(B)

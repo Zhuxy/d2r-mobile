@@ -68,6 +68,7 @@ Also, besides diagnostics, `diag.c` holds the entry hook of every server tick: w
 
 | File | What it does |
 |---|---|
+| `dm_spawn.c`, `dm_spawn.h` | Apply the custom global multiplier to each map's ordinary monster density and elite pack count for a game |
 | `dm_rift.c`, `dm_rift.h` | The Rift: the portal, picking maps, progress, the guardian, the timer and how many floors a clear is worth |
 | `dm_rift_ui.c` | The Rift panel, built from original widgets |
 | `dm_doorspot.h` | Where the two doors appear when a Rift floor is settled: guaranteed to be on a cell the player can walk to. Pure algorithm |

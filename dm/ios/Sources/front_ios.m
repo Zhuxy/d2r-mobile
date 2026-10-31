@@ -331,6 +331,8 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
     dm_tg_snapshot snapshot={0};
     dm_touch_game_snapshot(&snapshot);
     _overlay.nativeMapping=snapshot;
+    int tp=dm_quicktp_state(NULL)&1;
+    if(_controls.portal_tp_enabled!=tp) { dm_tc_set_portal_tp(&_controls,tp); [_overlay setNeedsDisplay]; }
     if(_navigation) return; // 导航态Portal禁用，不发布旧玩法bank。 | Portal is disabled in navigation mode; the old gameplay bank is not published.
     if(!snapshot.supported) return; // 旧包无OBS6，仅保留旧ZR已验域。 | Old builds have no OBS6; keep only the old verified ZR domain.
     uint64_t mask=0; (void)dm_tg_portal_mask;   // 免费回城：回城钮不再按原版手柄的回城书 / 卷轴键，点下去由宿主直接开门（dm_freetp.c，见 touchesBegan） | Free town portal: the town portal button no longer presses the original controller's Tome of Town Portal / scroll key; tapping it has the host open the portal directly (dm_freetp.c, see touchesBegan)
@@ -586,7 +588,7 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
         if(!_mapTouch && [self inMinimap:[t locationInView:self]]) { float cell=0; _mapTouch=t; _mapWasHidden=dm_ui_map_geom(&cell)==0; _mapP0=[t locationInView:self]; _mapT0=CACurrentMediaTime(); continue; }
         for(int i=0;i<16;i++) if(!_slot[i]) {
             _slot[i]=t; CGPoint p=[t locationInView:self]; { int ex=0; _controls.belt_rows=dm_belt_rows(&ex); _controls.belt_open=ex; } { int dm_cam_mode(void); _controls.cam_on=dm_cam_mode(); } dm_tc_begin_at(&_controls,i,p.x,p.y,CACurrentMediaTime()); slot=i;
-            if(!_navigation && _controls.finger[i].target==DM_TC_PORTAL) { void dm_tp_request(void); dm_tp_request(); LOG("前端：点回城钮 → 免费回城"); }   // 不要回城书 / 卷轴（宿主 dm_freetp.c） | No Tome of Town Portal / scroll needed (host dm_freetp.c)
+            if(!_navigation && _controls.finger[i].target==DM_TC_PORTAL && !_controls.finger[i].portal_tp) { dm_world_portal_home_request(); LOG("前端：点回城钮 → 免费回城并自动入门"); }   // 没有传送技能时仍单点回城 | A tap still opens a town portal when Teleport is unavailable
             // 功能页里的指针手指：问宿主这点是不是物品区（游戏主线程下一帧作答，松手时取）
             // Pointer finger in a function page: ask the host whether this point is an item area (the game main thread answers on the next frame; fetched on release)
             if(_controls.navigation_mode && _controls.pointer_slot==i && self.bounds.size.width>0) _itemSeq=dm_ui_item_query((float)(p.x/self.bounds.size.width),(float)(p.y/self.bounds.size.height)); _itemAsked=YES; _itemKind=-1;
@@ -699,8 +701,11 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
             // 按下 / 移动 / 抬起都取事件这一刻的时间（同 tick 的时钟）：面板开着时显示节拍降到 2 次 / 秒，原先取「上一拍的时刻」，0.12 秒的点按会被量成 0.5 秒、不算点按（点页签不切）
             // 即使没有最后一次移动事件，抬起位置也可能变化；换组键滑出后仍要取消。
             // Press / move / lift all take the time of the event itself (same clock as tick): with a panel open the display link drops to 2 per second, and previously "the time of the previous display-link tick" was used, so a 0.12-second tap was measured as 0.5 seconds and not counted as a tap (tapping a tab did not switch)
-            if(_controls.finger[i].target==DM_TC_SWAP) { CGPoint ep=[t locationInView:self];dm_tc_move_at(&_controls,i,ep.x,ep.y,CACurrentMediaTime()); }
+            unsigned qtp=_controls.portal_tp_seq, town=_controls.portal_town_seq;
+            if(_controls.finger[i].target==DM_TC_SWAP || _controls.finger[i].target==DM_TC_PORTAL) { CGPoint ep=[t locationInView:self];dm_tc_move_at(&_controls,i,ep.x,ep.y,CACurrentMediaTime()); }
             if(_pendFire) dm_tc_end_at(&_controls,i,_pendEndTime); else dm_tc_end_at(&_controls,i,CACurrentMediaTime()); _slot[i]=nil; slot=i;
+            if(_controls.portal_tp_seq!=qtp) { dm_quicktp_request(); LOG("前端：二合一钮短按 → 传送一次"); }
+            if(_controls.portal_town_seq!=town) { dm_world_portal_home_request(); LOG("前端：二合一钮长按拖出 → 回城并自动进入新蓝门"); }
             // 加点用手势不用按钮：第一下点技能图标 / 属性「+」= 选中（光标过去、出说明），同一个再点一下 = 加 1 点；换目标重新从选中开始
             // Spend points with a gesture, not a button: the first tap on a skill icon / stat "+" = select (cursor moves there, tooltip appears); tapping the same one again = add 1 point; changing target starts over from select
             if(_controls.tap_move_seq!=tm) { uint32_t hid=dm_ui_hit_id();

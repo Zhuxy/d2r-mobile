@@ -33,6 +33,7 @@ typedef struct {
     int aim_cancelled;
     int key_down; double key_down_s;   /* 技能钮：键是否已按下过、几时按下的（按下后先等判定时间，见 update） | Skill button: whether the key has gone down and when (after press, first wait the decision time, see update) */
     double start_time_s;
+    int portal_tp, portal_armed, portal_moved_early;   /* 二合一钮：短按传送；原地长按后拖出才回城 | Dual-use button: short tap Teleport; hold in place then drag out for Town Portal */
     int pointer_dragged, pointer_long;
     /* 界面连续手势（鼠标点击模式、起手不在物品区也不在面板外、位移过阈值时按起始方向定型，定型后不变）：1 = 纵向拖（滚动），2 = 横向拖（滑块）。
        手势层只定型，前端看到后把起手点与当前点转给宿主（dm_ui_drag_*），滚动 / 滑块由宿主按游戏自己的命中去做
@@ -54,6 +55,8 @@ typedef struct {
     int aim_slot, navigation_mode, map_cancel_active;
     uint64_t aim_move_sequence;
     int portal_pending, portal_phase; // 0idle / 1modifier-pending / 2armed
+    int portal_tp_enabled;
+    unsigned portal_tp_seq, portal_town_seq;
     uint64_t gesture_epoch, portal_binding_identity, portal_scene_epoch;
     /* 松手施放的短按脉冲：按键与右轴方向同时发布，前端到时调 dm_tc_pulse_end 收回 | Short-press pulse for release-to-cast: the key and the right-axis direction are published together, and the front end calls dm_tc_pulse_end to release it when due */
     uint64_t pulse_button, pulse_epoch;
@@ -181,6 +184,7 @@ void dm_tc_set_navigation_mode(dm_tc_state *state, int navigation_mode);
 void dm_tc_set_joy_block(dm_tc_state *state, int block);   /* 讲话文字框 / 对话菜单单独开着：落在底座上的手指不起摇杆、只当一次点击 | speech text box / dialogue menu open on its own: a finger on the base starts no stick and is just one click */
 /* 只取消回城控件拥有的core触点；物理触点由前端保留。 | Cancel only the core touch point owned by the town-portal widget; the physical touch point is kept by the front end. */
 void dm_tc_set_portal_button(dm_tc_state *state, uint64_t mask);
+void dm_tc_set_portal_tp(dm_tc_state *state, int available);
 void dm_tc_set_portal_binding(dm_tc_state *state, uint64_t mask, uint64_t binding_identity, uint64_t scene_epoch);
 /* 反馈确认仅作用于仍持有且身份/场景/请求一致的pending手势；返回是否首次armed。 | Feedback confirmation applies only to a pending gesture that is still held and whose identity/scene/request match; returns whether it was armed for the first time. */
 int dm_tc_portal_ack(dm_tc_state *state, uint64_t gesture_epoch, uint64_t binding_identity, uint64_t scene_epoch);

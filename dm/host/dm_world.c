@@ -93,6 +93,35 @@ static uint64_t g_gnd_stick_seen, g_gnd_stick_at;   // 摇杆时间戳上次读�
 static struct { uint32_t type, id; uint64_t until_ns, stick, next_fr, still_fr; int on, lx, ly; int n, i, tx, ty, replans, stop_at, empty, direct, alt, alt_on, ax, ay, nearest; uint16_t node[24][2]; } g_go;   // stop_at > 0：只走到这么多格内就停、不交互（测试开关「走到怪旁」用） | stop_at > 0: only walk to within this many cells and stop, without interacting (used by the test switch "walk next to a monster")
 static uint64_t w_find(uint32_t type, uint32_t id) { uint8_t *b = wb(); return type <= 5 ? ((uint64_t (*)(uint64_t, uint32_t, uint32_t, uint32_t))(b + 0x45f5f0))((uint64_t)(uintptr_t)(b + 0x2d603a0 + type * 0x400), id & 0x7f, id, type) : 0; }
 static void w_go(uint64_t u) { uint64_t dm_stick_last_ns(void); g_go.type = *(uint32_t *)u; g_go.nearest = 0; g_go.id = *(uint32_t *)(u + 8); g_go.until_ns = w_now_ns() + 15000000000ull; g_go.stick = dm_stick_last_ns(); g_go.next_fr = 0; g_go.still_fr = 0; g_go.n = g_go.i = g_go.replans = g_go.empty = g_go.direct = g_go.alt = g_go.alt_on = 0; g_go.stop_at = 0; g_go.on = 1; }
+static _Atomic int g_auto_portal_req;
+static struct { int active, level, x, y, n; uint32_t old[32]; uint64_t until_ns, stick; } g_auto_portal;
+void dm_world_portal_home_request(void) { atomic_store(&g_auto_portal_req, 1); }
+static void w_auto_portal_step(uint8_t *b) {
+    uint64_t pl = w_player(); int x = 0, y = 0;
+    if (atomic_exchange(&g_auto_portal_req, 0)) {
+        g_auto_portal.active = 0;
+        if (!pl || !w_unit_xy(pl, &x, &y) || dm_uiscreen_panel()) return;
+        g_auto_portal.level = dm_unit_level(pl); g_auto_portal.x = x; g_auto_portal.y = y; g_auto_portal.n = 0;
+        for (int k = 0; k < 128; k++) for (uint64_t u = *(uint64_t *)(b + 0x2d603a0 + 2 * 0x400 + 8 * k), j = 0; u && j < 256; u = *(uint64_t *)(u + 0x158), j++) {
+            int ux, uy; if (*(uint32_t *)(u + 4) != 59 || !w_unit_xy(u, &ux, &uy) || abs(ux - x) > 6 || abs(uy - y) > 6) continue;
+            if (g_auto_portal.n < 32) g_auto_portal.old[g_auto_portal.n++] = *(uint32_t *)(u + 8);
+        }
+        if (g_auto_portal.n == 32) { void dm_tp_request(void); dm_tp_request(); return; }   // 旧门过多仍开门，只跳过自动入门 | Too many old portals: still cast, skip automatic entry
+        uint64_t dm_stick_last_ns(void); g_auto_portal.stick = dm_stick_last_ns(); g_go.on = 0;
+        g_auto_portal.until_ns = w_now_ns() + 5000000000ull; g_auto_portal.active = 1;
+        void dm_tp_request(void); dm_tp_request();
+        LOG("二合一钮：请求回城，等待脚下新蓝门再进入");
+    }
+    if (!g_auto_portal.active) return;
+    uint64_t dm_stick_last_ns(void);
+    if (!pl || dm_unit_level(pl) != g_auto_portal.level || !w_unit_xy(pl, &x, &y) || abs(x - g_auto_portal.x) > 8 || abs(y - g_auto_portal.y) > 8 || dm_uiscreen_panel() || g_go.on || dm_stick_last_ns() != g_auto_portal.stick || w_now_ns() > g_auto_portal.until_ns) { g_auto_portal.active = 0; return; }
+    for (int k = 0; k < 128; k++) for (uint64_t u = *(uint64_t *)(b + 0x2d603a0 + 2 * 0x400 + 8 * k), j = 0; u && j < 256; u = *(uint64_t *)(u + 0x158), j++) {
+        int ux, uy, old = 0; if (*(uint32_t *)(u + 4) != 59 || !w_unit_xy(u, &ux, &uy) || abs(ux - g_auto_portal.x) > 6 || abs(uy - g_auto_portal.y) > 6) continue;
+        uint32_t id = *(uint32_t *)(u + 8); for (int i = 0; i < g_auto_portal.n; i++) old |= g_auto_portal.old[i] == id;
+        if (old || !(((int (*)(uint64_t, int, int, int, int))(b + 0x464a70))(u, 0, 0, -1, -1) & 1)) continue;
+        g_auto_portal.active = 0; w_go(u); LOG("二合一钮：新蓝门 id %u 已出现 → 自动交互", id); return;
+    }
+}
 // 路线规划：宿主自己在游戏的碰撞格上做最短路（广度优先），再拉直成几段直线，逐段发游戏自己的「跑到点」（0x4ad870 + 服务端移动）。只换规划，不换游戏逻辑。
 // 为什么不用游戏的寻路函数（main+0x59fa20）当规划器（三条原因）：①它是「朝目标走、贴着障碍滑」的贪心，会把人带进死角（哈洛加斯走向安亚：停在建筑北墙 22 格外，再算返回 0）；
 // ②它不把别的单位算障碍，而执行「跑到点」时单位会挡（紧挨瓦瑞夫出发：第一段穿过他脚下，人一步不动，重算同解）；③单段太长游戏不走（56 格一段包发了人不动）。
@@ -770,6 +799,7 @@ void dm_world_pump(void) {   // 取手柄处每帧调 | Called every frame at th
     DM_PROF(0, "w.test_seek", w_test_seek_step());
     w_test_xy_step();
     uint8_t *b = wb(); if (!b) return;
+    w_auto_portal_step(b);
     DM_PROF(0, "w.cam", w_cam_clear());
     w_cam_zoom(b);
     if (g_it.active) w_interaction_poll(w_player(), dm_guest_frame());

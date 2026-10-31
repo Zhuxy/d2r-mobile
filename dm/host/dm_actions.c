@@ -354,14 +354,22 @@ static void auto_pot_pump(uint8_t *b, uint64_t pl) {
 // Charge count = the item's own "charged skill" stat 204 (layer = skill id << 6 | level, value = max << 8 | remaining), read from the game's stat table, not tracked by us.
 enum { SS_IDLE, SS_REQ, SS_SWAPPING, SS_READY, SS_RELEASED, SS_BACK, SS_REBIND };
 static _Atomic int g_ss_phase, g_ss_srv_wset = -1, g_ss_kind[12], g_ss_charges[12], g_ss_alt[12];
+enum { Q_IDLE, Q_SWAPPING, Q_SELECT, Q_CAST, Q_WAIT, Q_RESTORE, Q_BACK };
+static _Atomic int g_qtp_phase;
+static _Atomic int g_qtp_srv_id = -1, g_qtp_srv_item = -1;
+void dm_quicktp_srv_selection(int id, int item) { atomic_store(&g_qtp_srv_id, id); atomic_store(&g_qtp_srv_item, item); }
 static _Atomic uint64_t g_ss_bit;          // 这一次压住 / 放行的那个键位 | The button bit held back / let through this time
 static _Atomic int g_ss_slot = -1, g_ss_early, g_ss_dead_town, g_ss_cast, g_ss_zl;   // g_ss_cast：放行后看见施法了（次数减了 / 进了动作）；g_ss_zl：按下那一刻 ZL 按着（第二套技能），补按时一并带上   // 死了 / 在城里：按下不换武器（城里原版本来就放不了技能，切过去只会白换两次）   // 玩家在切好之前就松手了 | g_ss_cast: a cast was seen after letting through (count went down / entered an action); g_ss_zl: ZL was held at the moment of the press (second skill set), carried along in supplementary presses   // dead / in town: a press does not swap weapons (in town the original game cannot cast skills anyway, switching over would only swap twice for nothing)   // the player released before the swap was done
 static _Atomic uint64_t g_ss_map[6];       // 6 个面：手柄位 | 普通格 << 32 | 替代格（按住 ZL）<< 40 | 6 face buttons: controller bit | normal cell << 32 | alternate cell (hold ZL) << 40
 static _Atomic uint32_t g_ss_equipped[16]; static _Atomic int g_ss_neq;   // 身上穿着的物品 id（两组都算） | Ids of the items being worn (both sets counted)
 void dm_swapskill_srv_wset(int w) { atomic_store(&g_ss_srv_wset, w); }
 int dm_swapskill_wset(void) { return atomic_load(&g_ss_srv_wset); }
-int dm_swapskill_busy(void) { return atomic_load(&g_ss_phase) != SS_IDLE; }   // 副手组技能的连招在进行（增益自动补 dm_autobuff.c 这时不自己换武器） | an off-hand-set skill combo is in progress (buff auto-recast dm_autobuff.c does not swap weapons itself meanwhile)
+int dm_swapskill_busy(void) { return atomic_load(&g_ss_phase) != SS_IDLE || g_qtp_phase != Q_IDLE; }   // 副手组技能 / 二合一传送进行中 | off-hand skill or combined Teleport is in progress
 static _Atomic uint32_t g_ss_itemsig; uint32_t dm_swapskill_itemsig(void) { return atomic_load(&g_ss_itemsig); }   // 客户端技能链表里物品给的技能（技能号、物品 id）的指纹 | Fingerprint of the item-granted skills (skill id, item id) in the client skill linked list
+enum { QUICKTP_SKILL = 54 };   // 原版 Teleport；装备给的非职业技能属性 97 / 聚气属性 204 都用这个技能号 | Native Teleport, for item oskill stat 97 and charged stat 204
+static _Atomic int g_qtp_req, g_qtp_flags, g_qtp_charges;
+int dm_quicktp_state(int *charges) { if (charges) *charges = atomic_load(&g_qtp_charges); return atomic_load(&g_qtp_flags); }
+void dm_quicktp_request(void) { atomic_store(&g_qtp_req, 1); }
 int dm_swapskill_slot(int slot, int *charges) {   // 1 = 技能在另一组（画「II」），2 = 充能技能（画次数），4 = 当前组也有同号技能（按下用当前组那个，不换武器）；可叠加 | 1 = the skill is in the other set (draw "II"), 2 = charged skill (draw the count), 4 = the current set also has a skill with the same id (a press uses the one in the current set, no weapon swap); can be combined
     if (slot < 0 || slot >= 12) return 0; int k = atomic_load(&g_ss_kind[slot]); if (charges) *charges = atomic_load(&g_ss_charges[slot]); return k; }
 int dm_swapskill_equipped(int32_t item) {   // 这件物品身上穿着（含换手位那组）：技能钮照常显示、不当空位 | This item is being worn (including the set in the weapon-swap slots): the skill button is shown as usual, not treated as an empty slot
@@ -382,8 +390,63 @@ static int ss_item_charges(uint64_t it, int skill) {   // 物品属性 204 里�
     for (uint64_t i = 0; arr && i < cnt && i < 512; i++) { uint32_t key = *(uint32_t *)(arr + 8 * i); if ((key >> 16) == 204 && (int)((key & 0xffff) >> 6) == skill) return *(int32_t *)(arr + 8 * i + 4) & 0xff; }
     return -1;
 }
+static int quicktp_source(uint8_t *b, uint64_t pl, const uint64_t *eqit, int neq, int *item, int *charges) {
+    uint64_t l = *(uint64_t *)(pl + 0x100), n = l ? *(uint64_t *)l : 0;
+    for (int k = 0; n && k < 1024; k++, n = *(uint64_t *)(n + 8)) {
+        uint64_t r = *(uint64_t *)n;
+        if (r && *(int16_t *)r == QUICKTP_SKILL && *(int32_t *)(n + 0x44) == -1 && *(int32_t *)(n + 0x38) > 0) { *item = -1; *charges = -1; return 1; }
+    }
+    int score = 0, flags = 0;
+    for (int e = 0; e < neq; e++) {
+        uint64_t it = eqit[e], d = *(uint64_t *)(it + 0x10); if (!d) continue;
+        int iid = *(int32_t *)(it + 8), oskill = ((int (*)(uint64_t, int, int))(b + 0x5b9290))(it, 97, QUICKTP_SKILL) > 0;
+        int ch = ss_item_charges(it, QUICKTP_SKILL); if (!oskill && ch <= 0) continue;
+        int current = ss_node(pl, QUICKTP_SKILL, iid, NULL), loc = *(uint8_t *)(d + 0x54);
+        if (!current && loc != 11 && loc != 12) continue;   // 另一组的武器 / 盾在换手位；身体装备必须已经在当前技能链里 | other-set weapon/shield is in swap slots; body gear must already be in the current skill list
+        int s = (current ? 4 : 0) + (oskill ? 2 : 1);   // 优先当前武器组，避免本组聚气被误判为要切副手 | Prefer the current set so existing charges are not mistaken for an off-hand cast
+        if (s > score) { score = s; *item = iid; *charges = oskill ? -1 : ch; flags = 1 | (current ? 0 : 2) | (oskill ? 0 : 4); }
+    }
+    return flags;
+}
+// 选右手技能 = 原版自己的选技能入口 main+0x43f170(技能号, 1 = 左手 / 0 = 右手, 来源物品 id)：
+// 它在客户端技能链表里按「技能号 + 物品 id」找节点，自己发 9 字节 0x3c，并把 [玩家+0x100]+0x10（右手）指到这个节点。
+// 自己拼 0x3c 只改了服务端，客户端右手节点还是旧的，下面的施放入口 main+0x4ace20 就找不到要放的技能。
+// 返回 1 = 选中并发了包；0 = 链表里没有这个节点（没发）。
+// Select the right-hand skill through the original selector main+0x43f170(skill, 1 = left / 0 = right, source item id):
+// it finds the node by "skill id + item id" in the client skill linked list, sends the 9-byte 0x3c itself, and points [player+0x100]+0x10 (right hand) at that node.
+// Hand-building the 0x3c only changed the server side, the client's right-hand node stayed the old one, and the cast entry main+0x4ace20 below could not find the skill to cast.
+// Returns 1 = selected and packet sent; 0 = no such node in the linked list (nothing sent).
+static int quicktp_select(uint8_t *b, int id, int item) {
+    return ((int (*)(int, int, int))(b + 0x43f170))(id, 0, item);
+}
+// 施放 = 原版右键放技能那条路 main+0x4ace20(玩家, 9, 格 x, 格 y, 0)：动作 9 = 右手按下，它取 [玩家+0x100]+0x10 的右手技能节点
+// （上面刚选成传送），起客户端动作（= 动画）并自己组 5 字节的对地施放包（0x4b8b44 处包号 = 内部动作号，右手 = 12 → 0x0c）。
+// 落点自己按原版算法算（0x2b4ef8 的位置与朝向、0x2b4bc8(管理器, 技能号)+8 的手柄落点距离，传送 = 23 格）：
+// 没有指定目标时 0x2b4ef8 给的朝向就是人物面向，所以传送朝人物面向飞；原来是镜头 / 上一次左摇杆方向，跟面向无关。
+// 目标格用 fcvtzs 截断，与原版 0x2b5c34 一致。0x4ace20 会优先用管理器 +0xd10 的指定目标，这里临时清空（同 dm_world.c 的交互调用），
+// 否则拖动技能钮选怪的残留目标会把传送拐到那只怪身上。返回 = 原版点击入口的返回值。
+// Cast = the original right-button skill path main+0x4ace20(player, 9, cell x, cell y, 0): action 9 = right-hand press, it takes the right-hand skill node at [player+0x100]+0x10
+// (just selected to Teleport above), starts the client action (= the animation) and builds the 5-byte ground cast packet itself (at 0x4b8b44 the packet id = the internal action number, right hand = 12 → 0x0c).
+// The landing point is computed by the original algorithm here (position and facing from 0x2b4ef8, the controller landing distance from 0x2b4bc8(manager, skill)+8, Teleport = 23 cells):
+// with no designated target, the direction 0x2b4ef8 returns is the character's facing, so Teleport flies where the character faces; the old code used the camera / last left-stick direction instead, which had nothing to do with facing.
+// The target cell is truncated with fcvtzs, same as the original 0x2b5c34. 0x4ace20 prefers the designated target in manager +0xd10, so it is cleared for this call (as in dm_world.c's interaction call);
+// otherwise a leftover target picked by dragging a skill button would bend the Teleport toward that monster. Returns = the original click entry's return value.
+static int quicktp_cast(uint8_t *b, uint64_t pl, int *tx, int *ty) {
+    uint64_t mgr = ((uint64_t (*)(void))(b + 0x2acecc))();
+    float pos[2] = { 0.0f, 0.0f }, dir[2] = { 1.0f, 0.0f };
+    ((void (*)(uint64_t, uint64_t, float *, float *))(b + 0x2b4ef8))(mgr, pl, pos, dir);
+    float dist = 23.0f; uint64_t rec = ((uint64_t (*)(uint64_t, int))(b + 0x2b4bc8))(mgr, QUICKTP_SKILL);
+    if (rec) { float d = *(float *)(rec + 8); if (d > 0.0f && d < 60.0f) dist = d; }   // 记录 +8 = defaultTargetDistance（手柄落点距离） | record +8 = defaultTargetDistance (controller landing distance)
+    *tx = (int)(pos[0] + dir[0] * dist); *ty = (int)(pos[1] + dir[1] * dist);
+    uint64_t keep = *(uint64_t *)(mgr + 0xd10); *(uint64_t *)(mgr + 0xd10) = 0;
+    int r = ((int (*)(uint64_t, int, int, int, uint64_t))(b + 0x4ace20))(pl, 9, *tx, *ty, 0);
+    *(uint64_t *)(mgr + 0xd10) = keep;
+    return r;
+}
 static void swapskill_pump(uint8_t *b, uint64_t pl) {
-    if (!pl) return;
+    if (!pl) {
+        atomic_store(&g_qtp_flags, 0); atomic_store(&g_qtp_req, 0); g_qtp_phase = Q_IDLE; return;
+    }
     // 面 → 格（main+0x2d13cbc，6 × {逻辑键, 普通格, 替代格}；逻辑键同 dm_touch_game_state.c sdk()）
     // Face button → cell (main+0x2d13cbc, 6 × {logical button, normal cell, alternate cell}; logical buttons as in dm_touch_game_state.c sdk())
     for (int i = 0; i < 6; i++) { uint32_t lg = *(uint32_t *)(b + 0x2d13cbc + 12 * i), nm = *(uint32_t *)(b + 0x2d13cbc + 12 * i + 4), al = *(uint32_t *)(b + 0x2d13cbc + 12 * i + 8);
@@ -394,6 +457,8 @@ static void swapskill_pump(uint8_t *b, uint64_t pl) {
     uint64_t inv = *(uint64_t *)(pl + 0x90), it = inv && *(uint32_t *)inv == 0x01020304 ? *(uint64_t *)(inv + 0x10) : 0; int neq = 0; uint64_t eqit[16];
     for (int k = 0; it && k < 512; k++) { uint64_t d = *(uint64_t *)(it + 0x10); if (!d) break; if (*(uint32_t *)(it + 0xc) == 1 && neq < 16) { eqit[neq] = it; atomic_store(&g_ss_equipped[neq], *(uint32_t *)(it + 8)); neq++; } it = *(uint64_t *)(d + 0xb0); }
     atomic_store(&g_ss_neq, neq);
+    int qitem = -1, qcharges = -1, qflags = quicktp_source(b, pl, eqit, neq, &qitem, &qcharges);
+    atomic_store(&g_qtp_flags, qflags); atomic_store(&g_qtp_charges, qcharges < 0 ? 0 : qcharges);
     { uint32_t h = 2166136261u; uint64_t l = *(uint64_t *)(pl + 0x100), n = l ? *(uint64_t *)l : 0;
       for (int k = 0; n && k < 1024; k++, n = *(uint64_t *)(n + 8)) { uint64_t r = *(uint64_t *)n; int32_t itm = *(int32_t *)(n + 0x44); if (r && itm != -1) { h = (h ^ (uint16_t)*(int16_t *)r) * 16777619u; h = (h ^ (uint32_t)itm) * 16777619u; } }
       atomic_store(&g_ss_itemsig, h); }
@@ -430,6 +495,56 @@ static void swapskill_pump(uint8_t *b, uint64_t pl) {
     { static int tree_from = -1; int dm_ui_swaptab_take(void), dm_ui_skilltree_open(void);
       if (dm_ui_swaptab_take()) { if (ph == SS_IDLE && w >= 0 && !busy && !dead) { if (tree_from < 0) tree_from = w; swap0(w); LOG("副手组技能：拍 %u 技能树里点 I / II 页签 → 换武器（当前组 %d）", t, w); } else LOG("副手组技能：技能树页签这一下没换（%s）", ph != SS_IDLE ? "连招进行中" : busy ? "动作中" : "读不到当前武器组"); }
       if (tree_from >= 0 && !dm_ui_skilltree_open() && ph == SS_IDLE) { if (w >= 0 && w != tree_from) { from = tree_from; tback = t; tries = 1; swap0(w); atomic_store(&g_ss_phase, SS_BACK); LOG("副手组技能：拍 %u 关技能树 → 切回打开时的第 %d 组", t, from); } tree_from = -1; } }
+    // 独立的传送事务：借原版「选右手技能 main+0x43f170 / 右手对地施放 main+0x4ace20」两个入口，不改任何快捷键绑定。
+    // 等服务端选择确认（diag 发布的服务端右手技能快照 = 54 + 请求的物品）再施放；只有位移或聚气减少才算成功。
+    // 施放走原版点击入口，动画与落点（人物面向 × 23 格）都是原版的；早先自己发 0x3c / 0x0c 包的做法已换掉
+    // （客户端根本没选中技能 → 没有动作动画，落点还是镜头 / 上一次左摇杆方向算出来的）。
+    static int qi, qfrom, qcharged, qch0, qx0, qy0, qold_id, qold_item, qtries;
+    static uint32_t qt;
+    if (atomic_exchange(&g_qtp_req, 0) && g_qtp_phase == Q_IDLE && ph == SS_IDLE && qflags && w >= 0 && !dead && !busy && !dm_uiscreen_panel() && !atomic_load(&g_ss_dead_town)) {
+        qi = qitem; qfrom = w; qcharged = (qflags & 4) != 0; qch0 = qcharges; qt = t; qtries = 0;
+        uint64_t pp = *(uint64_t *)(pl + 0x38); qx0 = pp ? *(uint16_t *)(pp + 2) : 0; qy0 = pp ? *(uint16_t *)(pp + 6) : 0;
+        if (qflags & 2) { swap0(w); g_qtp_phase = Q_SWAPPING; LOG("二合一钮：拍 %u 请求切到副手，传送来源物品 %d", t, qi); }
+        else { g_qtp_phase = Q_SELECT; LOG("二合一钮：拍 %u 本组传送来源物品 %d", t, qi); }
+    }
+    switch (g_qtp_phase) {
+    case Q_SWAPPING:
+        if (dead) { g_qtp_phase = Q_IDLE; break; }
+        if (w != qfrom && ss_node(pl, QUICKTP_SKILL, qi, NULL)) { g_qtp_phase = Q_SELECT; break; }
+        if (w == qfrom && !busy && t - qt >= 8 && qtries++ < 5) { swap0(w); qt = t; }
+        if (t - qt > 35) { LOG("【红】二合一钮：副手传送技能未出现，取消施放并切回"); g_qtp_phase = w == qfrom ? Q_IDLE : Q_BACK; qt = t; }
+        break;
+    case Q_SELECT: {
+        if (dead) { g_qtp_phase = Q_BACK; break; }
+        uint64_t l = *(uint64_t *)(pl + 0x100), old = l ? *(uint64_t *)(l + 0x10) : 0;
+        uint64_t rec = old ? *(uint64_t *)old : 0;
+        qold_id = rec ? *(int16_t *)rec : -1; qold_item = old ? *(int32_t *)(old + 0x44) : -1;
+        if (!ss_node(pl, QUICKTP_SKILL, qi, &qch0)) { LOG("【红】二合一钮：来源技能节点消失，取消"); g_qtp_phase = Q_BACK; break; }
+        if (!quicktp_select(b, QUICKTP_SKILL, qi)) { LOG("【红】二合一钮：原版选技能入口没找到技能 %d（物品 %d），取消", QUICKTP_SKILL, qi); g_qtp_phase = Q_BACK; break; }
+        qt = t; g_qtp_phase = Q_CAST;
+        break; }
+    case Q_CAST: {
+        if (atomic_load(&g_qtp_srv_id) == QUICKTP_SKILL && atomic_load(&g_qtp_srv_item) == qi && w >= 0 && !busy) {
+            int tx = qx0, ty = qy0;
+            int r = quicktp_cast(b, pl, &tx, &ty); qt = t; g_qtp_phase = Q_WAIT;
+            LOG("二合一钮：拍 %u %s原版右手施放入口（返回 %d），来源物品 %d，目标 %d,%d（起点 %d,%d，聚气 %d）", t, r ? "" : "【红】没起施放：", r, qi, tx, ty, qx0, qy0, qch0);
+        } else if (t - qt >= 25) { LOG("【红】二合一钮：服务端未确认右手传送技能（技能 %d，物品 %d），取消施放", atomic_load(&g_qtp_srv_id), atomic_load(&g_qtp_srv_item)); g_qtp_phase = Q_RESTORE; qt = t; }
+        break; }
+    case Q_WAIT: {
+        uint64_t pp = *(uint64_t *)(pl + 0x38); int x = pp ? *(uint16_t *)(pp + 2) : qx0, y = pp ? *(uint16_t *)(pp + 6) : qy0, ch = -1;
+        int spent = qcharged && ss_node(pl, QUICKTP_SKILL, qi, &ch) && ch >= 0 && ch < qch0;
+        int changed = qcharged ? spent : (x != qx0 || y != qy0);
+        if (changed || t - qt >= 45) { LOG("二合一钮：%s，坐标 %d,%d → %d,%d，聚气 %d → %d", changed ? "传送已确认" : "【红】传送未生效", qx0, qy0, x, y, qch0, ch); qt = t; g_qtp_phase = Q_RESTORE; }
+        break; }
+    case Q_RESTORE:
+        if (busy && t - qt < 70) break;
+        if (qold_id >= 0 && (qold_id != QUICKTP_SKILL || qold_item != qi) && !quicktp_select(b, qold_id, qold_item)) LOG("【红】二合一钮：原版选技能入口没能选回技能 %d（物品 %d）", qold_id, qold_item);
+        qt = t; g_qtp_phase = Q_BACK; break;
+    case Q_BACK:
+        if (dead || w == qfrom) { if (w == qfrom) LOG("二合一钮：拍 %u 已恢复第 %d 组", t, qfrom); g_qtp_phase = Q_IDLE; break; }
+        if (!busy && (mode == 1 || mode == 5 || t - qt >= 25) && t - qt >= 8) { swap0(w); qt = t; if (++qtries % 8 == 1) LOG("二合一钮：拍 %u 切回第 %d 组重试（当前第 %d 组）", t, qfrom, w); }
+        break;
+    }
     switch (ph) {
     case SS_REQ: { int s = atomic_load(&g_ss_slot); id = *(int32_t *)(b + 0x2d5f0c0 + 28 * s); item = *(int32_t *)(b + 0x2d5f0c0 + 28 * s + 4);
         if (atomic_load(&g_ss_kind[s]) & 4) {   // 两组都有：这一下把绑定的物品 id 临时指到当前组那个来源（原版选技能要「技能号 + 物品 id」都对上），松手后改回 | Both sets have it: for this press, temporarily point the binding's item id at the source in the current set (the original skill selection needs both "skill id + item id" to match), and change it back after release
@@ -465,8 +580,7 @@ static void swapskill_pump(uint8_t *b, uint64_t pl) {
         break;
     case SS_BACK:
         if (w == from || dead) { LOG("副手组技能：拍 %u 已切回第 %d 组（用了 %u 拍）", t, from, t - tback); atomic_store(&g_ss_phase, SS_IDLE); break; }
-        if (t - tback >= 8) { if (tries < 3) { tries++; tback = t; if (!busy) swap0(w); LOG("副手组技能：切回 25 拍没成，再试一次"); }
-            else { LOG("【红】副手组技能：切回三次都没成，停在第 %d 组（玩家可在物品栏自己切）", w); atomic_store(&g_ss_phase, SS_IDLE); } }
+        if (t - tback >= 8 && !busy) { tries++; tback = t; swap0(w); if (tries % 8 == 0) LOG("【红】副手组技能：仍未切回第 %d 组，继续重试（当前第 %d 组）", from, w); }
         break;
     }
 }
@@ -474,7 +588,8 @@ static void swapskill_pump(uint8_t *b, uint64_t pl) {
 // At the moment the controller state is fetched (hle_hid.c, before the game reads it): hold back the button that needs a weapon swap first, and let it through once the swap is done. raw = the buttons about to be handed to the game at this moment
 uint64_t dm_swapskill_filter(uint64_t raw) {
     static uint64_t prev; static int inj; uint64_t out = raw; int ph = atomic_load(&g_ss_phase); uint64_t bit = atomic_load(&g_ss_bit);
-    if (ph == SS_IDLE && !dm_uiscreen_panel() && !atomic_load(&g_ss_dead_town)) {   // 面板开着时这些键是界面操作（返回 / 绑定…），不拦 | When a panel is open these buttons are UI operations (back / bind…), not intercepted
+    if (g_qtp_phase != Q_IDLE && g_qtp_phase != Q_BACK) { out &= ~(DM_BTN_A | DM_BTN_B | DM_BTN_X | DM_BTN_Y | DM_BTN_R | DM_BTN_ZR); }
+    else if (ph == SS_IDLE && g_qtp_phase == Q_IDLE && !dm_uiscreen_panel() && !atomic_load(&g_ss_dead_town)) {   // 面板开着时这些键是界面操作（返回 / 绑定…），不拦 | When a panel is open these buttons are UI operations (back / bind…), not intercepted
         uint64_t rise = raw & ~prev;
         for (int i = 0; i < 6 && rise; i++) { uint64_t m = atomic_load(&g_ss_map[i]), fb = m & 0xffffffffu; if (!fb || !(rise & fb)) continue;
             int slot = (int)((raw & DM_BTN_ZL) ? (m >> 40) & 0xff : (m >> 32) & 0xff), k = slot < 12 ? atomic_load(&g_ss_kind[slot]) : 0;

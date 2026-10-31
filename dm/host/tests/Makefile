@@ -138,6 +138,8 @@ $(B)/t_cloudsync: t_cloudsync.c ../dm_cloudsync.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_cloudsync.c ../dm_cloudsync.c
 $(B)/t_touch: t_touch.c ../hle_touch.c ../front.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_touch.c ../hle_touch.c
+$(B)/t_portal_gesture: t_portal_gesture.c ../../ios/Sources/dm_touch_controls.c ../../ios/Sources/dm_touch_controls.h | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -I.. -o $@ t_portal_gesture.c ../../ios/Sources/dm_touch_controls.c
 $(B)/t_fs: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../dm_i18n.c | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_fs.c t_fs_stub.c ../dm_i18n.c
 $(B)/t_audio: t_audio.c ../hle_audio.c ../hle.h ../dm.h | $(B)

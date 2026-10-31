@@ -967,6 +967,8 @@ static void hud_tick(uint64_t G) {        // 每拍：受控玩家等级 / 本�
     // 副手组技能（dm_actions.c）：发布服务端记的当前武器组 [[玩家+0x10]+0xf0]+0x5a0（换武器包尾要带它，服务端 0x6de790 比对）
     // Off-hand set skills (dm_actions.c): publish the current weapon set as recorded by the server [[player+0x10]+0xf0]+0x5a0 (the weapon swap packet must carry it at the end; the server's 0x6de790 compares it)
     { void dm_swapskill_srv_wset(int); uint64_t pd = 0, q = 0; uint8_t w = 0; if (player && tk_rd(player + 0x10, &pd, 8) && pd && tk_rd(pd + 0xf0, &q, 8) && q && tk_rd(q + 0x5a0, &w, 1)) dm_swapskill_srv_wset(w); }
+    { void dm_quicktp_srv_selection(int, int); uint64_t sl = player ? *(uint64_t *)(player + 0x100) : 0, node = sl ? *(uint64_t *)(sl + 0x10) : 0, rec = node ? *(uint64_t *)node : 0;
+      dm_quicktp_srv_selection(rec ? *(int16_t *)rec : -1, node ? *(int32_t *)(node + 0x44) : -1); }
     // 免费鉴定（未鉴定物品双击，触摸层 → dm_actions.c dm_item_identify_free 记下物品 id）：在服务端拍里调游戏自己的鉴定函数
     // main+0x78acf0(游戏, 服务端玩家, 服务端物品)——鉴定卷轴 / 书在服务端走的那个（misc.txt pSpell 表 0x20ad7e8 第 1 项），凯恩「鉴定全部」最后也调它：
     // 已鉴定返回 0；否则经 0x64c5f0 置 [物品数据+0x18] |= 0x10 并自己广播物品更新（0x9c / 0x9d）。不扣卷轴（扣数是外层 0x786410 的事）、不查位置、不要 NPC

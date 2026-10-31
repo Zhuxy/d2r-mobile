@@ -426,6 +426,7 @@ void dm_tc_set_portal_binding(dm_tc_state *s,uint64_t mask,uint64_t identity,uin
 void dm_tc_set_portal_button(dm_tc_state *s,uint64_t mask) {
     dm_tc_set_portal_binding(s,mask,s->portal_binding_identity,s->portal_scene_epoch);
 }
+void dm_tc_set_portal_tp(dm_tc_state *s, int available) { s->portal_tp_enabled = !!available; }
 int dm_tc_portal_ack(dm_tc_state *s,uint64_t epoch,uint64_t identity,uint64_t scene) {
     if(!s->portal_pending || s->gesture_epoch!=epoch || s->portal_binding_identity!=identity || s->portal_scene_epoch!=scene)return 0;
     int active=0;for(int i=0;i<DM_TC_MAX_TOUCH;i++)active|=s->finger[i].active && s->finger[i].target==DM_TC_PORTAL;
@@ -505,6 +506,7 @@ void dm_tc_begin_at(dm_tc_state *s, int slot, float x, float y, double now_s) {
     }
     *f = (dm_tc_finger){.active=1, .target=enabled ? hit : DM_TC_NONE, .x=x, .y=y,
                            .aim_origin_x=x, .aim_origin_y=y,
+                           .portal_tp=enabled && hit==DM_TC_PORTAL && s->portal_tp_enabled,
                            .start_time_s=now_s};
     /* 禁用圆仍阻止落入左摇杆区，防止隐藏回城触点变成移动。 | A disabled circle still blocks falling through into the left stick area, preventing a hidden town-portal touch point from turning into movement. */
     if (s->navigation_mode && hit == DM_TC_NONE && s->pointer_slot == DM_TC_NONE) {
@@ -546,6 +548,14 @@ void dm_tc_move_at(dm_tc_state *s, int slot, float x, float y, double now_s) {
     dm_tc_finger *f = &s->finger[slot];
     f->x = x;
     f->y = y;
+    if (f->target == DM_TC_PORTAL && f->portal_tp && !f->portal_armed) {
+        float d = hypotf(x-f->aim_origin_x, y-f->aim_origin_y);
+        if (d > 10 * scale_for(&s->layout)) {
+            if (!f->portal_moved_early && now_s-f->start_time_s >= 0.5) f->portal_armed = 1;
+            else f->portal_moved_early = 1;
+        }
+        else if (!f->portal_moved_early && now_s-f->start_time_s >= 0.5) f->portal_armed = 1;
+    }
     if (pointer_finger(s, f)) {
         float distance = hypotf(f->x-f->aim_origin_x, f->y-f->aim_origin_y);
         if (!f->pointer_dragged && distance > DM_TC_POINTER_MOVE_PT * scale_for(&s->layout) && (!s->mouse_click_mode || s->pointer_item == 1))
@@ -587,6 +597,14 @@ void dm_tc_end_at(dm_tc_state *s, int slot, double now_s) {
     if (slot < 0 || slot >= DM_TC_MAX_TOUCH) return;
     s->last_time_s = now_s;
     if(s->finger[slot].active && s->finger[slot].target==DM_TC_PORTAL) {
+        dm_tc_finger done = s->finger[slot];
+        if (done.portal_tp && !s->navigation_mode) {
+            const dm_tc_target *p = &s->layout.target[DM_TC_PORTAL];
+            float travel = hypotf(done.x-done.aim_origin_x, done.y-done.aim_origin_y);
+            float outside = hypotf(done.x-p->x, done.y-p->y);
+            if (done.portal_armed && outside > p->r + 8 * scale_for(&s->layout)) ++s->portal_town_seq;
+            else if (!done.portal_moved_early && now_s-done.start_time_s < 0.5 && travel <= 10 * scale_for(&s->layout) && outside <= p->r) ++s->portal_tp_seq;
+        }
         s->finger[slot]=(dm_tc_finger){.target=DM_TC_NONE};
         for(int i=0;i<DM_TC_MAX_TOUCH;i++)if(s->finger[i].active && s->finger[i].target==DM_TC_PORTAL) {update(s);return;}
         dm_tc_cancel_portal(s);return;
@@ -702,6 +720,11 @@ void dm_tc_pointer_press(dm_tc_state *s, float x, float y, uint64_t button) {
 }
 void dm_tc_tick(dm_tc_state *s, double now_s) {
     s->last_time_s = now_s;
+    for (int i = 0; i < DM_TC_MAX_TOUCH; i++) {
+        dm_tc_finger *f = &s->finger[i];
+        if (f->active && f->target == DM_TC_PORTAL && f->portal_tp && !f->portal_armed && !f->portal_moved_early &&
+            now_s-f->start_time_s >= 0.5 && hypotf(f->x-f->aim_origin_x, f->y-f->aim_origin_y) <= 10 * scale_for(&s->layout)) f->portal_armed = 1;
+    }
     /* 补发不许盖掉在发的脉冲（腰带喝药等）：在发就等；那个脉冲收回时（dm_tc_pulse_end）把补发时刻推到 ZL 再领先满 DM_TC_ZL_LEAD_S 之后（原先到点直接覆盖，腰带那下没了） | The make-up send must not overwrite a pulse being sent (belt potion, etc.): wait while one is being sent; when that pulse is released (dm_tc_pulse_end), push the make-up time to after ZL has again led for a full DM_TC_ZL_LEAD_S (it used to overwrite directly when due, and the belt press was lost) */
     if (s->belt_gap_cell && now_s >= s->belt_gap_at && !s->pulse_button) { uint64_t btn = s->layout.target[DM_TC_BELT1 + (s->belt_gap_cell & 0xf)].button; s->belt_gap_cell = 0;
         if (btn && !s->navigation_mode) { s->pulse_rx = s->pulse_ry = 0; s->pulse_button = btn; ++s->pulse_epoch; } update(s); }

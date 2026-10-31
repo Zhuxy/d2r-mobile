@@ -5,6 +5,7 @@
 #include "dm_touch_native_art.h"
 #include "hle.h"
 #include "dm_input.h"
+#include "../../host/dm_actions.h"
 #include "../../host/dm_i18n.h"
 
 static UIColor *bronze(CGFloat a) { return [UIColor colorWithRed:.66 green:.53 blue:.32 alpha:a]; }
@@ -42,6 +43,7 @@ static dm_ta_glyph shown_glyph(const dm_tg_snapshot *n, uint64_t button, uint64_
     UIImage *_circle, *_socket, *_map, *_menu, *_nativeAtlases[DM_TA_ATLASES], *_silAtlases[DM_TA_ATLASES];   // _sil：同帧位的银色剪影图集（gen_hud_v4.py） | _sil: silver silhouette atlas at the same frame positions (gen_hud_v4.py)
     NSMutableDictionary<NSString *,UIImage *> *_glyphFrames, *_buttonFrames;
     dm_ta_glyph _nativeVisualGlyphs[5];
+    int _quickTPFlags, _quickTPCharges;
 }
 - (instancetype)initWithFrame:(CGRect)f {
     if (!(self = [super initWithFrame:f])) return nil;
@@ -61,6 +63,8 @@ static dm_ta_glyph shown_glyph(const dm_tg_snapshot *n, uint64_t button, uint64_
     _nativeMapping=n;
     uint64_t buttons[5]={DM_BTN_A,DM_BTN_B,DM_BTN_X,DM_BTN_Y,DM_BTN_R};
     uint64_t hostNow=now_ns(); BOOL dirty=NO;
+    int charges=0, flags=dm_quicktp_state(&charges);
+    if(flags!=_quickTPFlags || charges!=_quickTPCharges) { _quickTPFlags=flags; _quickTPCharges=charges; dirty=YES; }
     for(int i=0;i<5;i++) {
         dm_ta_glyph next=shown_glyph(&n,buttons[i],hostNow,self.controls?self.controls->skill_set:0),previous=_nativeVisualGlyphs[i];
         if(next.status!=previous.status || next.raw_skill_id!=previous.raw_skill_id || next.atlas!=previous.atlas ||
@@ -248,7 +252,8 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
             icon=[self skillImage:g held:held];
             showCaption=g.status!=DM_TA_EMPTY && !icon;
         } else if(!self.navigationMode && i==DM_TC_PORTAL) {
-            icon=[self skillImage:dm_ta_skill(359) held:held]; // 原版回城技能图（技能描述表 Town Portal：通用技能页第 18 格，219 / 220 / 411 同一张），不显示次数 | the original game's town portal skill image (skill description table Town Portal: cell 18 of the generic skill page, 219 / 220 / 411 share one image), count not shown
+            int q=dm_quicktp_state(&ssCharges); ssKind=(q&2 ? 1 : 0)|(q&4 ? 2 : 0);
+            icon=[self skillImage:dm_ta_skill((q&1)?54:359) held:held];
         } else if(!self.navigationMode && (i==DM_TC_MENU || i==DM_TC_MAP)) {
             icon=[self frameImage:i==DM_TC_MAP?_map:_menu key:[NSString stringWithFormat:@"fixed:%d:%d",i,held] rect:CGRectMake(held?36:0,0,36,36)];
         }
@@ -273,7 +278,15 @@ static void v4text(NSString *str, NSDictionary *glyphs, CGFloat x, CGFloat basel
                 CGContextSetLineWidth(c,MAX(1,br*.14)); CGContextSetStrokeColorWithColor(c,[UIColor colorWithRed:.63 green:.50 blue:.27 alpha:1].CGColor); CGContextStrokeEllipseInRect(c,lw2);
                 CGFloat ts=br*1.15; caption(@"Ⅱ",CGRectMake(bx-br,by-ts*.62,br*2,ts*1.4),ts,1); }
             if(ssKind&2) { NSDictionary *ui=v4ui(); CGFloat W=self.bounds.size.width, u=self.bounds.size.height/1320.0; NSDictionary *bd=ui[@"badge"];
-                if(bd && u>0) v4text([NSString stringWithFormat:@"%d",ssCharges<0?0:ssCharges],bd[@"glyphs"],(t->x+t->r*.66-W/2)/u+1434,(t->y+t->r*.42)/u,1,W,u); }
+                if(bd && u>0) v4text([NSString stringWithFormat:@"%d",ssCharges<0?0:ssCharges],bd[@"glyphs"],(t->x+t->r*(i==DM_TC_PORTAL?-.58:.66)-W/2)/u+1434,(t->y+t->r*.42)/u,1,W,u); }
+            if(i==DM_TC_PORTAL && s->portal_tp_enabled) {
+                UIImage *town=[self skillImage:dm_ta_skill(359) held:held];
+                CGFloat br=t->r*.37, bx=t->x+t->r*.67, by=t->y+t->r*.67;
+                CGRect bb=CGRectMake(bx-br,by-br,br*2,br*2);
+                CGContextSetFillColorWithColor(c,[UIColor colorWithRed:.10 green:.08 blue:.06 alpha:.96].CGColor); CGContextFillEllipseInRect(c,bb);
+                CGContextSetLineWidth(c,MAX(1,br*.12)); CGContextSetStrokeColorWithColor(c,bronze(1).CGColor); CGContextStrokeEllipseInRect(c,CGRectInset(bb,1,1));
+                [town drawInRect:CGRectInset(bb,br*.12,br*.12)];
+            }
             if(bare) continue;
             NSString *ln=i==DM_TC_MAIN?@"lbl_main.png":[NSString stringWithFormat:@"lbl_f%d.png",i-DM_TC_SKILL1+1+(s->skill_set?4:0)];
             UIImage *lbl=[UIImage imageWithContentsOfFile:[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:[@"hud_v4_ui" stringByAppendingPathComponent:ln]]];

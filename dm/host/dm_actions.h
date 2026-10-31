@@ -71,3 +71,5 @@ uint64_t dm_swapskill_filter(uint64_t buttons);   // 取手柄状态处（hle_hi
 void dm_swapskill_srv_wset(int w);                // 服务端拍（diag.c hud_tick）发布当前武器组 0 / 1 | the server tick (diag.c hud_tick) publishes the current weapon set 0 / 1
 int dm_swapskill_slot(int slot, int *charges);    // 技能钮显示：1 = 技能在另一组（「II」角标），2 = 充能技能（*charges = 剩余次数） | skill button display: 1 = the skill is in the other set ("II" badge), 2 = charged skill (*charges = remaining charges)
 int dm_swapskill_equipped(int32_t item_id);       // 这件物品身上穿着（含换手那组） | this item is worn on the body (including the weapon-swap set)
+int dm_quicktp_state(int *charges);                 // 触屏二合一钮：位 1 可传送、位 2 来源在另一组、位 4 是聚气；charges 返回剩余次数 | touch dual-use button: bit 1 Teleport available, bit 2 other weapon set, bit 4 charged; charges is the remaining count
+void dm_quicktp_request(void);                     // 短按请求放一次传送；走原版选技能 / 右手点击入口，不改快捷键绑定 | request one Teleport cast from a short tap; goes through the original skill-select / right-hand click entries without changing shortcut bindings

@@ -73,3 +73,4 @@ int dm_swapskill_slot(int slot, int *charges);    // 技能钮显示：1 = 技�
 int dm_swapskill_equipped(int32_t item_id);       // 这件物品身上穿着（含换手那组） | this item is worn on the body (including the weapon-swap set)
 int dm_quicktp_state(int *charges);                 // 触屏二合一钮：位 1 可传送、位 2 来源在另一组、位 4 是聚气；charges 返回剩余次数 | touch dual-use button: bit 1 Teleport available, bit 2 other weapon set, bit 4 charged; charges is the remaining count
 void dm_quicktp_request(void);                     // 短按请求放一次传送；走原版选技能 / 右手点击入口，不改快捷键绑定 | request one Teleport cast from a short tap; goes through the original skill-select / right-hand click entries without changing shortcut bindings
+int dm_swapskill_offhand_gives(int skill);         // 换手那组的装备给这个非职业技能（战争召唤等，绑定里物品 -1） | the gear in the weapon-swap set grants this non-class skill (Call to Arms and the like; item -1 in the binding)

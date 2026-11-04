@@ -15,7 +15,7 @@
 // touch_swap_above: 0 = left of portal (default), 1 = above the skill fan; applies after Apply.
 // spawn_rate: 0/1/2/3 = 0.5x/1x/1.5x/2x normal density and elite pack count; default 1, effective next game.
 int dm_custom_get(const char *key);
-int dm_custom_lang_explicit(void);   // 语言开关（键 lang_en）在设置文件里写着的值：-1 没写过（不动原版设置）/ 0 简中 / 1 英文；hle_fs.c 挂存档时读 | Value of the language switch (key lang_en) as written in the settings file: -1 never written (original settings left alone) / 0 Simplified Chinese / 1 English; read by hle_fs.c at save mount
+int dm_custom_lang_explicit(void);   // 语言开关（键 lang）在设置文件里写着的值：-1 没写过（不动原版设置）/ 0 中文 / 1 English / 2 Español / 3 Русский / 4 한국어 / 5 Português；hle_fs.c 挂存档时读 | Value of the language switch (key lang) as written in the settings file: -1 never written (original settings left alone) / 0 Chinese / 1 English / 2 Spanish / 3 Russian / 4 Korean / 5 Portuguese; read by hle_fs.c at save mount
 int dm_custom_voice_explicit(void);   // 单独配音开关（键 voice）：-1 没写过 / 0 中文配音 / 1 英文配音；hle_fs.c 挂存档时读
 // q3d 3D 画质（缺省 0 = 流畅优先：掉帧自动降 3D 比例；1 = 画质优先：不自动降），读盘 / 应用时调 hle_oe.c 的 dm_3d_quality_mode_set 生效
 // q3d 3D quality (default 0 = smoothness first: automatically lowers the 3D scale on frame drops; 1 = quality first: no automatic lowering); applied on load / apply by calling hle_oe.c's dm_3d_quality_mode_set
